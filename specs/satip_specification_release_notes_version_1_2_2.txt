@@ -1,0 +1,29 @@
+
+SAT>IP Version 1.2.1 Release Notes
+
+Functional
+Added Appendix E: Unicast Only Profile
+Added Appendix D: Support for DVB-C/C2 (Optional)
+Section 3.4.1 added possibility for a SAT>IP server to provide a URL to a Channel List (local or remote) 
+
+Editorial
+Section 3.3.2 added missing ssdp:byebye to the NTS header value
+Section 3.3.2 added a sentence saying that the DEVICEID.SES.COM field is only required for servers implementing multicast
+Section 3.3.3.2 added values for the DEVICEID range to clarify that it can go up to 255
+Section 3.3.4 added TTL value specification: TTL=2
+Section 3.3.4 removed SEARCHPORT.UPNP.ORG from the example response to signify that its presence there is not desirable
+Section 3.4.1 for the <satip:X_SATIPCAP> element changed the text from "may be included" to "should be included"
+Section 3.4.1 updated satipmsys in extended capabilities signaling for DVBC/C2
+Section 3.5.1 removed the second figure on page 25 and added the restriction that in SAT>IP a single TCP connection cannot carry more than one RTSP session
+Section 3.5.4 removed "stream=" from example message to bring it in-line with the table
+Section 3.5.11 added clarifying text: Issuing the "pids=" statement replaces any previously configured pids list
+Section 3.5.12 removed "stream=" from OPTIONS message in sequence diagram to bring it in-line with the table 
+Section 3.6.1 added additional information on IP Packet pacing, added figure
+
+SAT>IP Version 1.2.2 Release Notes
+
+Editorial
+Section 3.5.11 made it clearer that client requests need to be complete (in the interest of interoperability) and need to list all the mandatory query parameters even if some servers may not need them to work properly
+
+
+  

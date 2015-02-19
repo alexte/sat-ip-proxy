@@ -1,0 +1,10 @@
+{
+  "name": "sat-ip-proxy-ssdp",
+  "description": "SSDP server for the sat-ip-proxy project",
+  "author": "Alexander Terczka",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "node-ssdp": "2.x"
+  }
+}

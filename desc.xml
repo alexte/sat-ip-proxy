@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<root xmlns="urn:schemas-upnp-org:device-1-0" configId="0">
+    <specVersion><major>1</major><minor>1</minor></specVersion>
+    <device>
+	<deviceType>urn:ses-com:device:SatIPServer:1</deviceType>
+	<friendlyName>SAT&gt;IP-Proxy</friendlyName>
+	<manufacturer>iXlab</manufacturer>
+	<manufacturerURL>http://alext.mail.at</manufacturerURL>
+	<modelDescription>SAT&gt;IP-Proxy</modelDescription>
+	<modelName>OpenSourceSatIPProxy</modelName>
+	<modelNumber>1.0</modelNumber>
+	<modelURL>http://alext.mail.at/</modelURL>
+	<serialNumber>0815</serialNumber>
+	<UDN>uuid:44444444-3333-3333-3333-cdefabcdefab</UDN>
+	<iconList>
+	    <icon><mimetype>image/png</mimetype><width>48</width><height>48</height><depth>24</depth><url>/icons/sm.png</url></icon>
+	    <icon><mimetype>image/png</mimetype><width>120</width><height>120</height><depth>24</depth><url>/icons/lr.png</url></icon>
+	    <icon><mimetype>image/jpeg</mimetype><width>48</width><height>48</height><depth>24</depth><url>/icons/sm.jpg</url></icon>
+	    <icon><mimetype>image/jpeg</mimetype><width>120</width><height>120</height><depth>24</depth><url>/icons/lr.jpg</url></icon>
+	</iconList>
+	<satip:X_SATIPCAP xmlns:satip="urn:ses-com:satip">DVBS2-4</satip:X_SATIPCAP>
+    </device>
+</root>
