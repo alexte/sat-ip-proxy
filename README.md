@@ -1,4 +1,8 @@
-# sat-ip-proxy
+sat-ip-proxy
+============
+
+development in progress, and now yet complete
+---------------------------------------------
 
 A proxy server for the SAT>IP protocol
 
