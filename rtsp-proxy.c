@@ -19,7 +19,11 @@
 #include<errno.h>
 #include<string.h>
 
-#define MAXOPENFDS 20000
+#define MAXOPENFDS 2000
+#define MAXREQUESTLEN 2000
+
+#define TRUE 1
+#define FALSE 0
 
 char *prg;
 int debug=0;
@@ -72,10 +76,13 @@ int prepare_socket(char *srvip,char *port)
 }
 
 struct pollfd lfd[MAXOPENFDS];
+char inbuf[MAXOPENFDS][MAXREQUESTLEN+1];
+int inbuf_offset[MAXOPENFDS];
 time_t lastact[MAXOPENFDS];
 unsigned long srcip[MAXOPENFDS];
 int nfd;
 
+// convert long ip to string, (! overwritten with every call !)
 char *inet_ntoa(unsigned long ip)
 {
     static char buf[16];
@@ -84,7 +91,7 @@ char *inet_ntoa(unsigned long ip)
     return buf;
 }
 
-char *reasonstr[]={"OK","Timeout","Hangup"};
+char *reasonstr[]={"OK","Timeout","Hangup","Request to long"};
 
 void inline dropconnection(int n,int reason)
 {
@@ -101,14 +108,19 @@ void inline dropconnection(int n,int reason)
     nfd--;
 }
 
+int req_complete(char *s)
+{
+    if(strstr(s,"\r\n\r\n")) return TRUE;
+    return FALSE;
+}
+
 void poll_loop(int accsock)
 {
     int i,nret,newfd,len;
     time_t now,lastcollect;
     struct sockaddr_in sin;
-    unsigned int sinlen;
+    socklen_t sinlen;
     long long nc=0; // number of connections
-    char buf[2049];
 
     time(&now);
     lfd[0].fd=accsock;
@@ -140,6 +152,7 @@ void poll_loop(int accsock)
                 if (lfd[0].revents&POLLIN && nfd<MAXOPENFDS)            // new connection coming in
                 {
                     nret--;
+		    sinlen=sizeof(struct sockaddr_in);
                     newfd=accept(accsock,(struct sockaddr *)&sin, &sinlen);
                     if (newfd<0) fprintf(stderr,"accept socket failed %s\n",strerror(errno));
                     else
@@ -159,13 +172,22 @@ void poll_loop(int accsock)
                     if (lfd[i].revents&POLLNVAL) dropconnection(i,2);
                     if (lfd[i].revents&POLLIN) 
                     {
-                        len=read(lfd[i].fd,buf,2048);
+                        len=read(lfd[i].fd,inbuf[i]+inbuf_offset[i],MAXREQUESTLEN-inbuf_offset[i]);
                         if (len<0) dropconnection(i,2);
                         else
                         {
-                            buf[len]=0;
-                            write(lfd[i].fd,"OK Got It\n",strlen("OK Got It\n"));
-                            dropconnection(i,0);
+                            inbuf[i][inbuf_offset[i]+len]=0;
+			    if (req_complete(inbuf[i]))
+			    {
+			        if (debug>1) fprintf(stderr,"Req: %s\n",inbuf[i]);
+				inbuf_offset[i]=0;
+                            	write(lfd[i].fd,"OK Got It\n",strlen("OK Got It\n"));
+                            	dropconnection(i,0);
+			    } else
+			    {
+				inbuf_offset[i]+=len;
+                                if (inbuf_offset[i]>=MAXREQUESTLEN-1) dropconnection(i,3);
+			    }
                         }
                     }
                 }
