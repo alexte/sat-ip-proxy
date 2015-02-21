@@ -8,7 +8,7 @@
 #include<unistd.h>
 #include<time.h>
 #include<sys/poll.h>
-#include<syslog.h>
+#include<syslog.h> 
 #include<stdlib.h>
 #include<unistd.h>
 #include<sys/socket.h>
@@ -18,6 +18,7 @@
 #include<error.h>
 #include<errno.h>
 #include<string.h>
+#include<regex.h>
 
 #define MAXOPENFDS 2000
 #define MAXREQUESTLEN 2000
@@ -79,30 +80,32 @@ int connect_server()
 {
     struct hostent *phent;
     struct servent *pservent;
-    struct sockaddr_in sa={AF_INET};
+    static struct sockaddr_in sa={AF_INET};
+    static int firstrun=1;
     int s,portn;
 
-    s=socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);
-    if (s<0) { fprintf(stderr,"socket() failed"); return -1;  }
-
-    phent=gethostbyname(target);
-    if (phent==NULL) { syslog(LOG_ERR,"gethostbyname failed"); return -1;  }
-    portn=atoi(port);
-    if (port==0)
+    if (firstrun)
     {
-        pservent=getservbyname(port,"tcp");
-        if (pservent==NULL)
+        phent=gethostbyname(target);
+        if (phent==NULL) { fprintf(stderr,"gethostbyname failed\n"); return -1;  }
+        portn=atoi(port);
+        if (port==0)
         {
-            syslog(LOG_ERR,"getservbyname() failed"); 
-            return -1;
+            pservent=getservbyname(port,"tcp");
+            if (pservent==NULL)
+            { fprintf(stderr,"getservbyname() failed\n"); return -1; }
+            portn=ntohs(pservent->s_port);
         }
-        portn=ntohs(pservent->s_port);
+        memmove(&sa.sin_addr,phent->h_addr,sizeof(sa.sin_addr));
+        sa.sin_port=htons(portn);
+        firstrun=0;
     }
-    memmove(&sa.sin_addr,phent->h_addr,sizeof(sa.sin_addr));
-    sa.sin_port=htons(portn);
+
+    s=socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);
+    if (s<0) { fprintf(stderr,"socket() failed\n"); return -1;  }
     if (connect(s,(struct sockaddr *)&sa,sizeof(sa))<0) 
     {
-        syslog(LOG_ERR,"connect failed (%s)",strerror(errno));
+        fprintf(stderr,"connect failed (%s)\n",strerror(errno));
         return -1;
     }
     return s;
@@ -150,6 +153,33 @@ int req_complete(char *s)
     return FALSE;
 }
 
+char *translate_request(char *s)
+{
+    static char out[MAXREQUESTLEN+30];
+    regex_t regex;
+    regmatch_t match[5];
+    int ret;
+
+    *out=0;
+    ret=regcomp(&regex,"^.* rtsp://([0-9.]+)[:/].*",REG_EXTENDED);	// change target IP in rtsp url
+    if (ret) { fprintf(stderr,"compiling regex failed\n"); return s; }
+
+    ret=regexec(&regex,s,5,match,0);
+    if (!ret) // match
+    {
+	if (match[1].rm_so>0)
+	{
+	    strncpy(out,s,match[1].rm_so);
+	    out[match[1].rm_so]=0;
+	    strcat(out,target);
+	    strcat(out,s+match[1].rm_eo);
+	}
+    }
+
+    regfree(&regex);
+    return *out?out:s;
+}
+
 void poll_loop(int accsock)
 {
     int i,nret,newfd,len;
@@ -157,6 +187,7 @@ void poll_loop(int accsock)
     struct sockaddr_in sin;
     socklen_t sinlen;
     long long nc=0; // number of connections
+    char *converted_request;
 
     time(&now);
     lfd[0].fd=accsock;
@@ -234,20 +265,31 @@ void poll_loop(int accsock)
                         else
                         {
                             lastact[i]=now;
-			    write(lfd[is_client[i]?i+1:i-1].fd,inbuf[i],len);
-/*
-                            inbuf[i][inbuf_offset[i]+len]=0;
-			    if (req_complete(inbuf[i]))
+			    if (!is_client[i])
 			    {
-			        if (debug>1) fprintf(stderr,"------------------- new req\n%s",inbuf[i]);
-				inbuf_offset[i]=0;
-                            	write(lfd[i].fd,"OK Got It\n",strlen("OK Got It\n"));
-			    } else
-			    {
-				inbuf_offset[i]+=len;
-                                if (inbuf_offset[i]>=MAXREQUESTLEN-1) dropconnection(i,3);
+				write(lfd[i-1].fd,inbuf[i],len);
+				if (debug>1)
+				{
+				    inbuf[i][len]=0;
+				    fprintf(stderr,"----------------------- res\n%s",inbuf[i]);
+				}
+	 		    }
+			    else
+                            { 							// collect data up to a full rtsp request
+				inbuf[i][inbuf_offset[i]+len]=0;
+			    	if (req_complete(inbuf[i]))
+			    	{
+			            if (debug>1) fprintf(stderr,"------------------- new req\n%s",inbuf[i]);
+				    converted_request=translate_request(inbuf[i]);
+			            if (debug>1) fprintf(stderr,"------------------- converted req\n%s",converted_request);
+                            	    write(lfd[i+1].fd,converted_request,strlen(converted_request));
+				    inbuf_offset[i]=0;
+			        } else
+			        {
+				    inbuf_offset[i]+=len;
+                                    if (inbuf_offset[i]>=MAXREQUESTLEN-1) dropconnection(i,3);
+			        }
 			    }
-*/
                         }
                     }
                 }
