@@ -1,5 +1,5 @@
 
-CFLAGS=-Wall -O3
+CFLAGS=-Wall -O3 -D_GNU_SOURCE
 
 all: rtsp-proxy
 
