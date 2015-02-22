@@ -4,6 +4,7 @@
  */
 
 #include<stdio.h>
+#include<string.h>
 #include<getopt.h>
 #include<unistd.h>
 #include<time.h>
@@ -17,7 +18,6 @@
 #include<netdb.h>
 #include<error.h>
 #include<errno.h>
-#include<string.h>
 #include<regex.h>
 #include<arpa/inet.h>
 
@@ -145,12 +145,87 @@ int req_complete(char *s)
     return FALSE;
 }
 
+void remove_header(char *line[],int r)
+{
+    int i;
+
+    for(i=r;*line[i];i++) line[i]=line[i+1];
+}
+
+int search_header(char *line[],char *needle,int start)
+{
+    int i,len;
+    len=strlen(needle);
+
+    for(i=start;*line[i];i++)
+    {
+	if(!strncasecmp(line[i],needle,len) && (line[i])[len]==':')  // found
+		return i;
+    }
+    return -1;
+}
+
+int new_udpport()     // TODO: new ports per session
+{
+    return 15000;
+}
+
+// Sample SETUP Transport
+//   Example C>S: Transport:RTP/AVP;unicast;client_port=5000-5001
+//   Example S>C: Transport: RTP/AVP;unicast;destination=192.168.45.1;source=192.168.45.40;client_port=5000-5001;server_port=6976-6977
+
+void handle_setup(char *line[])
+{
+    int i,port;
+    char *part;
+    char newtransport[1000],parameter[50];
+	// transform transport header
+    for(i=1;;)
+    {
+	i=search_header(line,"transport",i);
+        if (i>0) 
+        {
+	    if (strcasestr(line[i],"multicast")) remove_header(line,i);
+	    else 
+	    {
+    	    	*newtransport=0;
+		strcpy(newtransport,"Transport:");
+		part=strtok(line[i]+10,";");
+		while(part)
+		{
+		    if (!strncasecmp(part,"client_port",11)) 
+		    {
+		        if (debug>1) fprintf(stderr,"Found client_port: %s\n",part);
+			port=new_udpport();
+			sprintf(parameter,"client_port=%d",port);
+		        strcat(newtransport,parameter); strcat(newtransport,";"); 
+		    }
+		    else { strcat(newtransport,part); strcat(newtransport,";"); }
+		    part=strtok(NULL,";");
+		}
+		strcpy(line[i],newtransport);
+		i++;
+	    }
+    	} 
+	else break;
+    }
+	// remember session header
+	// setup udp proxy
+}
+
+void handle_teardown(char *line[])
+{
+    int i;
+	// get session header
+    i=search_header(line,"Session",1);
+    if (i>0) {} // remove session
+}
+
 char *translate_request(char *s)
 {
     static char out[MAXREQUESTLEN+30];
     char *line[100];
     regex_t top_regex;
-    regex_t header_regex;
     regmatch_t match[5];
     int i,ln,ret;
     char *p;
@@ -181,14 +256,19 @@ char *translate_request(char *s)
 	    out[match[1].rm_so]=0;
 	    strcat(out,target);
 	    strcat(out,line[0]+match[1].rm_eo);
+    	    strcat(out,"\r\n");
 	}
     }
     else { fprintf(stderr,"Top request line match failed\n"); return NULL; }
 
-    for (i=1;i<=ln;i++)
+    if (!strncmp(line[0],"SETUP ",5)) handle_setup(line);
+    if (!strncmp(line[0],"TEARDOWN ",5)) handle_teardown(line);
+
+    for (i=1;;i++)
     {
-	strcat(out,"\r\n");
 	strcat(out,line[i]);
+        strcat(out,"\r\n");
+	if (!*(line[i])) break;
     }
 
     regfree(&top_regex);
