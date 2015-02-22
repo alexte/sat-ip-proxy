@@ -19,6 +19,7 @@
 #include<errno.h>
 #include<string.h>
 #include<regex.h>
+#include<arpa/inet.h>
 
 #define MAXOPENFDS 2000
 #define MAXREQUESTLEN 2000
@@ -116,21 +117,12 @@ char inbuf[MAXOPENFDS][MAXREQUESTLEN+1];
 int inbuf_offset[MAXOPENFDS];
 time_t lastact[MAXOPENFDS];
 int is_client[MAXOPENFDS];
-unsigned long srcip[MAXOPENFDS];
+struct in_addr srcip[MAXOPENFDS];
 int nfd;
-
-// convert long ip to string, (! overwritten with every call !)
-char *inet_ntoa(unsigned long ip)
-{
-    static char buf[16];
-
-    sprintf(buf,"%lu.%lu.%lu.%lu", ip&0xff, ip>>8&0xff, ip>>16&0xff, ip>>24);
-    return buf;
-}
 
 char *reasonstr[]={"OK","Timeout","Hangup","Request to long","Server not reachable"};
 
-void inline dropconnection(int n,int reason)
+void dropconnection(int n,int reason)
 {
     int i;
     time_t now;
@@ -156,27 +148,50 @@ int req_complete(char *s)
 char *translate_request(char *s)
 {
     static char out[MAXREQUESTLEN+30];
-    regex_t regex;
+    char *line[100];
+    regex_t top_regex;
+    regex_t header_regex;
     regmatch_t match[5];
-    int ret;
+    int i,ln,ret;
+    char *p;
 
     *out=0;
-    ret=regcomp(&regex,"^.* rtsp://([0-9.]+)[:/].*",REG_EXTENDED);	// change target IP in rtsp url
-    if (ret) { fprintf(stderr,"compiling regex failed\n"); return s; }
 
-    ret=regexec(&regex,s,5,match,0);
+    for (ln=0,p=s;ln<=99;ln++)		// split request up into lines
+    {
+        line[ln]=p;
+	for (;*p && *p!='\r' && *p!='\n';p++);
+	if (!*p) break;
+	*p=0;
+	p++;
+	if (*p=='\r' || *p=='\n') p++;
+    }
+    if (ln>99) { fprintf(stderr,"Too many header header lines in request\n"); return NULL; }
+
+			// compile all regex rules
+    ret=regcomp(&top_regex,"^.* rtsp://([0-9.]+)[:/].*",REG_EXTENDED);	// change target IP in rtsp url
+    if (ret) { fprintf(stderr,"compiling regex failed\n"); return NULL; }
+
+    ret=regexec(&top_regex,line[0],5,match,0);
     if (!ret) // match
     {
 	if (match[1].rm_so>0)
 	{
-	    strncpy(out,s,match[1].rm_so);
+	    strncpy(out,line[0],match[1].rm_so);
 	    out[match[1].rm_so]=0;
 	    strcat(out,target);
-	    strcat(out,s+match[1].rm_eo);
+	    strcat(out,line[0]+match[1].rm_eo);
 	}
     }
+    else { fprintf(stderr,"Top request line match failed\n"); return NULL; }
 
-    regfree(&regex);
+    for (i=1;i<=ln;i++)
+    {
+	strcat(out,"\r\n");
+	strcat(out,line[i]);
+    }
+
+    regfree(&top_regex);
     return *out?out:s;
 }
 
@@ -230,7 +245,7 @@ void poll_loop(int accsock)
 			is_client[nfd]=TRUE;
 			inbuf_offset[nfd]=0;
                         lastact[nfd]=now;
-                        srcip[nfd]=sin.sin_addr.s_addr;
+                        srcip[nfd]=sin.sin_addr;
                         nfd++; nc++;
 
 			newfd=connect_server();	 	// connect to server immediately
@@ -281,6 +296,7 @@ void poll_loop(int accsock)
 			    	{
 			            if (debug>1) fprintf(stderr,"------------------- new req\n%s",inbuf[i]);
 				    converted_request=translate_request(inbuf[i]);
+				    if (!converted_request) { dropconnection(i,3); continue; }
 			            if (debug>1) fprintf(stderr,"------------------- converted req\n%s",converted_request);
                             	    write(lfd[i+1].fd,converted_request,strlen(converted_request));
 				    inbuf_offset[i]=0;
