@@ -23,6 +23,7 @@
 
 #define MAXOPENFDS 2000
 #define MAXREQUESTLEN 2000
+#define MAXSESSIONS 300
 
 #define TRUE 1
 #define FALSE 0
@@ -33,12 +34,51 @@ char *port="554";
 char *srvip="0.0.0.0";
 char *target;
 int idletimeout=120;
+int nr_sessions=0;
+
+struct {
+    char *id;
+    struct in_addr srcip;
+    int client_port;
+    int lastuse;
+} session[MAXSESSIONS];
 
 void usage()
 {
     fprintf(stderr,"usage: %s [-d] [-i <srvip>] [-p <port>] <target>\n"
 	           "    srvip: ip to listen to (default 0.0.0.0 = any)\n"
 		   "    port: tcp port to listen and connect to rtsp (default 554)\n",prg);
+}
+
+int add_session(char *id,struct in_addr srcip,int client_port)
+{
+    int n=nr_sessions;
+    char *p;
+
+    for(p=id;*p && *p==' ';p++);
+    if (n>=MAXSESSIONS) return -1;
+    nr_sessions++;
+    session[n].id=strdup(p);
+    if (!session[n].id) return -1;
+    session[n].srcip=srcip;
+    session[n].client_port=client_port;
+    return n;
+}
+
+void remove_session(char *id)
+{
+    int i;
+    char *p;
+
+    for(p=id;*p && *p==' ';p++);
+    for (i=0;i<nr_sessions;i++)
+	if (!strcmp(session[i].id,p)) break;
+    if (i>=nr_sessions) return;
+
+    free(session[i].id);
+    nr_sessions--;
+    for (;i<nr_sessions-1;i++)
+	session[i]=session[i+1];
 }
 
 int prepare_socket(char *srvip,char *port)
@@ -174,13 +214,13 @@ int new_udpport()     // TODO: new ports per session
 //   Example C>S: Transport:RTP/AVP;unicast;client_port=5000-5001
 //   Example S>C: Transport: RTP/AVP;unicast;destination=192.168.45.1;source=192.168.45.40;client_port=5000-5001;server_port=6976-6977
 
-void handle_setup(char *line[])
+int handle_setup(char *line[],struct in_addr srcip)
 {
-    int i,port;
+    int session,i,port,client_port=-1;
     char *part;
     char newtransport[1000],parameter[50];
 	// transform transport header
-    for(i=1;;)
+    for(i=1;;) // search transport headers
     {
 	i=search_header(line,"transport",i);
         if (i>0) 
@@ -193,9 +233,11 @@ void handle_setup(char *line[])
 		part=strtok(line[i]+10,";");
 		while(part)
 		{
-		    if (!strncasecmp(part,"client_port",11)) 
+		    if (!strncasecmp(part,"client_port=",12)) 
 		    {
 		        if (debug>1) fprintf(stderr,"Found client_port: %s\n",part);
+			client_port=atol(part+12); // takes first port number from range 
+						   // BTW what's the range for ?
 			port=new_udpport();
 			sprintf(parameter,"client_port=%d",port);
 		        strcat(newtransport,parameter); strcat(newtransport,";"); 
@@ -209,8 +251,13 @@ void handle_setup(char *line[])
     	} 
 	else break;
     }
-	// remember session header
+    i=search_header(line,"session",1);
+
+    if (client_port<0) return -1;
+    if ((session=add_session(line[i]+8,srcip,client_port))<0) return -1;
+
 	// setup udp proxy
+    return session;
 }
 
 void handle_teardown(char *line[])
@@ -218,10 +265,13 @@ void handle_teardown(char *line[])
     int i;
 	// get session header
     i=search_header(line,"Session",1);
-    if (i>0) {} // remove session
+    if (i>0) 
+    {
+	remove_session(line[i]+8);
+    }
 }
 
-char *translate_request(char *s)
+char *translate_request(char *s,struct in_addr srcip)
 {
     static char out[MAXREQUESTLEN+30];
     char *line[100];
@@ -261,8 +311,10 @@ char *translate_request(char *s)
     }
     else { fprintf(stderr,"Top request line match failed\n"); return NULL; }
 
-    if (!strncmp(line[0],"SETUP ",5)) handle_setup(line);
-    if (!strncmp(line[0],"TEARDOWN ",5)) handle_teardown(line);
+    if (!strncmp(line[0],"SETUP ",5)) 
+	if (handle_setup(line,srcip)<0) return NULL; 
+    if (!strncmp(line[0],"TEARDOWN ",5)) 
+	handle_teardown(line);
 
     for (i=1;;i++)
     {
@@ -375,7 +427,7 @@ void poll_loop(int accsock)
 			    	if (req_complete(inbuf[i]))
 			    	{
 			            if (debug>1) fprintf(stderr,"------------------- new req\n%s",inbuf[i]);
-				    converted_request=translate_request(inbuf[i]);
+				    converted_request=translate_request(inbuf[i],srcip[i]);
 				    if (!converted_request) { dropconnection(i,3); continue; }
 			            if (debug>1) fprintf(stderr,"------------------- converted req\n%s",converted_request);
                             	    write(lfd[i+1].fd,converted_request,strlen(converted_request));
