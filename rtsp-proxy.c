@@ -114,6 +114,14 @@ void remove_session(char *id)
 	session[i]=session[i+1];
 }
 
+void dump_sessions()
+{
+    int i;
+
+    for (i=0;i<nr_sessions;i++)
+	fprintf(stderr,"%d  id:%s ip:%s cseq:%s\n",i, session[i].id, inet_ntoa(session[i].srcip), session[i].cseq);
+}
+
 int prepare_socket(char *srvip,char *port)
 {
     struct sockaddr_in sin={AF_INET};
@@ -244,7 +252,7 @@ char *get_header(char *line[],char *needle)
     i=search_header(line,needle,1);
     if (i<=0) return NULL;
 
-    for(p=line[i];*p && *p==' ';p++);
+    for(p=line[i]+strlen(needle)+1;*p && *p==' ';p++);
     return p;
 }
 
@@ -316,6 +324,17 @@ int handle_setup(char *line[],struct in_addr srcip)
     return 1;
 }
 
+void handle_play(char *line[])
+{
+    char *id;
+    struct SESSION *s;
+	// get session header
+    id=get_header(line,"Session");
+    s=get_session(id);
+    if (s && s->cseq)  // remove old cseq when session is allready set
+    { free(s->cseq); s->cseq=NULL; }
+}
+
 void handle_teardown(char *line[])
 {
     char *id;
@@ -364,10 +383,11 @@ char *translate_request(char *s,struct in_addr srcip)
     }
     else { fprintf(stderr,"Top request line match failed\n"); return NULL; }
 
-    if (!strncmp(line[0],"SETUP ",5)) 
+    if (!strncmp(line[0],"SETUP ",6)) 
 	if (handle_setup(line,srcip)<0) return NULL; 
-    if (!strncmp(line[0],"TEARDOWN ",5)) 
-	handle_teardown(line);
+
+    if (!strncmp(line[0],"PLAY ",5)) handle_play(line);
+    if (!strncmp(line[0],"TEARDOWN ",8)) handle_teardown(line);
 
     for (i=1;;i++)
     {
@@ -380,6 +400,40 @@ char *translate_request(char *s,struct in_addr srcip)
     return *out?out:s;
 }
 
+char *translate_response(char *s_in)
+{
+    char *cseq,*sessionid,*line[100];
+    int ln;
+    char *p,*s;
+    struct SESSION *sess;
+
+    s=strdup(s_in);
+    if (!s) { perror("out of memory"); exit(1); }
+    for (ln=0,p=s;ln<=99;ln++)		// split request up into lines
+    {
+        line[ln]=p;
+	for (;*p && *p!='\r' && *p!='\n';p++);
+	if (!*p) break;
+	*p=0;
+	p++;
+	if (*p=='\r' || *p=='\n') p++;
+    }
+    if (ln>99) { fprintf(stderr,"Too many header header lines in response\n"); return NULL; }
+
+    cseq=get_header(line,"cseq");
+    sessionid=get_header(line,"session");
+
+    if (cseq && sessionid)
+    {
+	if (get_session(sessionid)) { free(s); return s_in; }
+	sess=get_session_by_cseq(cseq);
+	if (!sess) { free(s); return s_in; }
+	sess->id=strdup(sessionid);
+    }
+	// TODO: we should change the transport: header accordingly
+    free(s); return s_in;
+}
+
 void poll_loop(int accsock)
 {
     int i,nret,newfd,len;
@@ -387,7 +441,7 @@ void poll_loop(int accsock)
     struct sockaddr_in sin;
     socklen_t sinlen;
     long long nc=0; // number of connections
-    char *converted_request;
+    char *translated;
 
     time(&now);
     lfd[0].fd=accsock;
@@ -402,6 +456,7 @@ void poll_loop(int accsock)
     {
         nret=poll(lfd,nfd,2000);
         time(&now);
+	if (debug>1) dump_sessions();
         switch(nret)
         {
             case 0:     // timeout
@@ -471,10 +526,10 @@ void poll_loop(int accsock)
 			    	if (req_complete(inbuf[i]))
 			    	{
 			            if (debug>1) fprintf(stderr,"------------------- new req\n%s",inbuf[i]);
-				    converted_request=translate_request(inbuf[i],srcip[i]);
-				    if (!converted_request) { dropconnection(i,5); continue; }
-			            if (debug>1) fprintf(stderr,"------------------- converted req\n%s",converted_request);
-                            	    write(lfd[i+1].fd,converted_request,strlen(converted_request));
+				    translated=translate_request(inbuf[i],srcip[i]);
+				    if (!translated) { dropconnection(i,5); continue; }
+			            if (debug>1) fprintf(stderr,"------------------- converted req\n%s",translated);
+                            	    write(lfd[i+1].fd,translated,strlen(translated));
 				    inbuf_offset[i]=0;
 			        } else
 			        {
@@ -484,7 +539,14 @@ void poll_loop(int accsock)
 			    }
 			    else
 			    {
-				write(lfd[i-1].fd,inbuf[i],len);
+				if (!strncmp(inbuf[i],"RTSP/1.0 200",12))
+				{
+				    inbuf[i][len]=0;
+				    translated=translate_response(inbuf[i]);
+				    if (!translated) { dropconnection(i,5); continue; }
+				    write(lfd[i-1].fd,translated,strlen(translated));
+				}
+				else write(lfd[i-1].fd,inbuf[i],len);
 				if (debug>1)
 				{
 				    inbuf[i][len]=0;
