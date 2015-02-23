@@ -54,6 +54,9 @@ void usage()
 		   "    port: tcp port to listen and connect to rtsp (default 554)\n",prg);
 }
 
+void bp(char *s)
+{ puts(s); fflush(stdout); }
+
 struct SESSION *start_session(struct in_addr srcip,char *cseq)
 {
     int n=nr_sessions;
@@ -74,16 +77,22 @@ struct SESSION *start_session(struct in_addr srcip,char *cseq)
 struct SESSION *get_session(char *id)
 {
     int i;
+    if (!id) return NULL;
     for(i=0;i<nr_sessions;i++)
-	if(!strcmp(session[i].id,id)) return &session[i];
+	if(session[i].id && !strcmp(session[i].id,id))
+	{
+	    session[i].lastuse=now;
+	    return &session[i];
+	}
     return NULL;
 }
 
 struct SESSION *get_session_by_cseq(char *cseq)
 {
     int i;
+    if (!cseq) return NULL;
     for(i=0;i<nr_sessions;i++)
-	if(!strcmp(session[i].cseq,cseq)) return &session[i];
+	if(session[i].cseq && !strcmp(session[i].cseq,cseq)) return &session[i];
     return NULL;
 }
 
@@ -189,12 +198,10 @@ char *reasonstr[]={"OK","Timeout","Hangup","Request to long","Server not reachab
 void dropconnection(int n,int reason)
 {
     int i;
-    time_t now;
 
     if (!is_client[n]) n--;	// drop client and server connection, select client first
     if (debug)
     {
-    	time(&now);
         fprintf(stderr,"%ld disconnect from %s: %s (%d/%d)\n",now,inet_ntoa(srcip[n]),reasonstr[reason],n,nfd);
     }
     close(lfd[n].fd);
