@@ -35,12 +35,16 @@ char *srvip="0.0.0.0";
 char *target;
 int idletimeout=120;
 int nr_sessions=0;
+time_t now;
 
-struct {
+struct SESSION {
     char *id;
+    char *cseq;
     struct in_addr srcip;
     int client_port;
+    int recv_port;
     int lastuse;
+    int udp_fd;
 } session[MAXSESSIONS];
 
 void usage()
@@ -50,19 +54,37 @@ void usage()
 		   "    port: tcp port to listen and connect to rtsp (default 554)\n",prg);
 }
 
-int add_session(char *id,struct in_addr srcip,int client_port)
+struct SESSION *start_session(struct in_addr srcip,char *cseq)
 {
     int n=nr_sessions;
-    char *p;
 
-    for(p=id;*p && *p==' ';p++);
-    if (n>=MAXSESSIONS) return -1;
+    if (n>=MAXSESSIONS) return NULL;
     nr_sessions++;
-    session[n].id=strdup(p);
-    if (!session[n].id) return -1;
     session[n].srcip=srcip;
-    session[n].client_port=client_port;
-    return n;
+    session[n].id=NULL;
+    session[n].cseq=strdup(cseq);
+    if (!session[n].cseq) return NULL;
+    session[n].client_port=-1;
+    session[n].recv_port=-1;
+    session[n].lastuse=now;
+    session[n].udp_fd=-1;
+    return &session[n];
+}
+
+struct SESSION *get_session(char *id)
+{
+    int i;
+    for(i=0;i<nr_sessions;i++)
+	if(!strcmp(session[i].id,id)) return &session[i];
+    return NULL;
+}
+
+struct SESSION *get_session_by_cseq(char *cseq)
+{
+    int i;
+    for(i=0;i<nr_sessions;i++)
+	if(!strcmp(session[i].cseq,cseq)) return &session[i];
+    return NULL;
 }
 
 void remove_session(char *id)
@@ -76,6 +98,8 @@ void remove_session(char *id)
     if (i>=nr_sessions) return;
 
     free(session[i].id);
+    free(session[i].cseq);
+
     nr_sessions--;
     for (;i<nr_sessions-1;i++)
 	session[i]=session[i+1];
@@ -160,7 +184,7 @@ int is_client[MAXOPENFDS];
 struct in_addr srcip[MAXOPENFDS];
 int nfd;
 
-char *reasonstr[]={"OK","Timeout","Hangup","Request to long","Server not reachable"};
+char *reasonstr[]={"OK","Timeout","Hangup","Request to long","Server not reachable","Request Translation Failed"};
 
 void dropconnection(int n,int reason)
 {
@@ -205,6 +229,18 @@ int search_header(char *line[],char *needle,int start)
     return -1;
 }
 
+char *get_header(char *line[],char *needle)
+{
+    int i;
+    char *p;
+
+    i=search_header(line,needle,1);
+    if (i<=0) return NULL;
+
+    for(p=line[i];*p && *p==' ';p++);
+    return p;
+}
+
 int new_udpport()     // TODO: new ports per session
 {
     return 15000;
@@ -216,9 +252,23 @@ int new_udpport()     // TODO: new ports per session
 
 int handle_setup(char *line[],struct in_addr srcip)
 {
-    int session,i,port,client_port=-1;
-    char *part;
+    int i,client_port=-1;
+    char *sessionid,*part,*cseq;
+    struct SESSION *s;
     char newtransport[1000],parameter[50];
+
+	// ---------------------------------------- lookup session
+    sessionid=get_header(line,"session");
+    s=get_session(sessionid);
+    if (!s) 
+    {
+        cseq=get_header(line,"cseq");
+    	if (cseq==NULL) return -1;
+        s=get_session_by_cseq(cseq);
+	if (!s) s=start_session(srcip,cseq);
+    }
+    if (!s) return -1;
+
 	// transform transport header
     for(i=1;;) // search transport headers
     {
@@ -238,8 +288,11 @@ int handle_setup(char *line[],struct in_addr srcip)
 		        if (debug>1) fprintf(stderr,"Found client_port: %s\n",part);
 			client_port=atol(part+12); // takes first port number from range 
 						   // BTW what's the range for ?
-			port=new_udpport();
-			sprintf(parameter,"client_port=%d",port);
+
+			if (s->client_port<0) s->client_port=client_port;
+			if (s->recv_port<0) s->recv_port=new_udpport();
+			sprintf(parameter,"client_port=%d",s->recv_port);
+
 		        strcat(newtransport,parameter); strcat(newtransport,";"); 
 		    }
 		    else { strcat(newtransport,part); strcat(newtransport,";"); }
@@ -251,24 +304,17 @@ int handle_setup(char *line[],struct in_addr srcip)
     	} 
 	else break;
     }
-    i=search_header(line,"session",1);
-
-    if (client_port<0) return -1;
-    if ((session=add_session(line[i]+8,srcip,client_port))<0) return -1;
 
 	// setup udp proxy
-    return session;
+    return 1;
 }
 
 void handle_teardown(char *line[])
 {
-    int i;
+    char *id;
 	// get session header
-    i=search_header(line,"Session",1);
-    if (i>0) 
-    {
-	remove_session(line[i]+8);
-    }
+    id=get_header(line,"Session");
+    if (id) remove_session(id);
 }
 
 char *translate_request(char *s,struct in_addr srcip)
@@ -330,7 +376,7 @@ char *translate_request(char *s,struct in_addr srcip)
 void poll_loop(int accsock)
 {
     int i,nret,newfd,len;
-    time_t now,lastcollect;
+    time_t lastcollect;
     struct sockaddr_in sin;
     socklen_t sinlen;
     long long nc=0; // number of connections
@@ -412,23 +458,14 @@ void poll_loop(int accsock)
                         else
                         {
                             lastact[i]=now;
-			    if (!is_client[i])
-			    {
-				write(lfd[i-1].fd,inbuf[i],len);
-				if (debug>1)
-				{
-				    inbuf[i][len]=0;
-				    fprintf(stderr,"----------------------- res\n%s",inbuf[i]);
-				}
-	 		    }
-			    else
+			    if (is_client[i])
                             { 							// collect data up to a full rtsp request
 				inbuf[i][inbuf_offset[i]+len]=0;
 			    	if (req_complete(inbuf[i]))
 			    	{
 			            if (debug>1) fprintf(stderr,"------------------- new req\n%s",inbuf[i]);
 				    converted_request=translate_request(inbuf[i],srcip[i]);
-				    if (!converted_request) { dropconnection(i,3); continue; }
+				    if (!converted_request) { dropconnection(i,5); continue; }
 			            if (debug>1) fprintf(stderr,"------------------- converted req\n%s",converted_request);
                             	    write(lfd[i+1].fd,converted_request,strlen(converted_request));
 				    inbuf_offset[i]=0;
@@ -438,6 +475,15 @@ void poll_loop(int accsock)
                                     if (inbuf_offset[i]>=MAXREQUESTLEN-1) dropconnection(i,3);
 			        }
 			    }
+			    else
+			    {
+				write(lfd[i-1].fd,inbuf[i],len);
+				if (debug>1)
+				{
+				    inbuf[i][len]=0;
+				    fprintf(stderr,"----------------------- res\n%s",inbuf[i]);
+				}
+	 		    }
                         }
                     }
                 }
