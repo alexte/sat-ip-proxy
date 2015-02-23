@@ -118,6 +118,7 @@ void dump_sessions()
 {
     int i;
 
+    puts("\nSessions:");
     for (i=0;i<nr_sessions;i++)
 	fprintf(stderr,"%d  id:%s ip:%s cseq:%s\n",i, session[i].id, inet_ntoa(session[i].srcip), session[i].cseq);
 }
