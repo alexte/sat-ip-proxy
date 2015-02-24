@@ -45,6 +45,7 @@ struct SESSION {
     int recv_port;
     int lastuse;
     int udp_fd;
+    int udp2_fd;
 } session[MAXSESSIONS];
 
 void usage()
@@ -63,6 +64,7 @@ struct LFD_M {
     enum { f_accept,f_client,f_server,f_udprcv} type;
     struct SESSION *sessionpointer;
     struct in_addr srcip;
+    struct sockaddr_in saddr;
 } lfd_m[MAXOPENFDS];
 
 int nfd;
@@ -105,6 +107,7 @@ struct SESSION *start_session(struct in_addr srcip,char *cseq)
     session[n].recv_port=-1;
     session[n].lastuse=now;
     session[n].udp_fd=-1;
+    session[n].udp2_fd=-1;
     return &session[n];
 }
 
@@ -140,8 +143,8 @@ void remove_session(char *id)
 	if (!strcmp(session[i].id,p)) break;
     if (i>=nr_sessions) return;
 
-    if (session[i].udp_fd>=0) close(session[i].udp_fd);
-    remove_lfd_by_fd(session[i].udp_fd);
+    if (session[i].udp_fd>=0) { close(session[i].udp_fd); remove_lfd_by_fd(session[i].udp_fd); }
+    if (session[i].udp2_fd>=0) { close(session[i].udp2_fd); remove_lfd_by_fd(session[i].udp2_fd); }
 
     free(session[i].id);
     free(session[i].cseq);
@@ -155,7 +158,7 @@ void dump_sessions()
 {
     int i;
 
-    puts("\nSessions:");
+    if (nr_sessions>0) puts("\nSessions:");
     for (i=0;i<nr_sessions;i++)
 	fprintf(stderr,"%d  id:%s ip:%s cseq:%s\n",i, session[i].id, inet_ntoa(session[i].srcip), session[i].cseq);
 }
@@ -276,6 +279,7 @@ void remove_header(char *line[],int r)
 {
     int i;
 
+    free(line[r]);
     for(i=r;*line[i];i++) line[i]=line[i+1];
 }
 
@@ -306,26 +310,45 @@ char *get_header(char *line[],char *needle)
 
 int udp_recv_port=15000;
 
-int start_udp_proxy(struct SESSION *s)
+int start_udp_proxy(struct SESSION *s,struct in_addr srcip,int client_port)
 {
     int fd;
 
-    if (nfd>=MAXOPENFDS-1) { fprintf(stderr,"Maxumum FDS reached"); return -1; }
+    if (nfd>=MAXOPENFDS-2) { fprintf(stderr,"Maxumum FDS reached"); return -1; }
+
+    s->recv_port=udp_recv_port;
+
     fd=open_udp(srvip,udp_recv_port);
     if (fd<0) return -1;
-
     s->udp_fd=fd;
-    s->recv_port=udp_recv_port;
 
     lfd[nfd].fd=fd;
     lfd[nfd].events=POLLIN|POLLPRI;
     lfd[nfd].revents=0;
     lfd_m[nfd].type=f_udprcv;
     lfd_m[nfd].sessionpointer=s;
+    lfd_m[nfd].saddr.sin_family=AF_INET;
+    lfd_m[nfd].saddr.sin_addr=srcip;
+    lfd_m[nfd].saddr.sin_port=ntohs(client_port);
     lfd_m[nfd].lastact=now;
     nfd++; 
 
-    udp_recv_port++;
+    fd=open_udp(srvip,udp_recv_port+1);
+    if (fd<0) return -1;
+    s->udp2_fd=fd;
+
+    lfd[nfd].fd=fd;
+    lfd[nfd].events=POLLIN|POLLPRI;
+    lfd[nfd].revents=0;
+    lfd_m[nfd].type=f_udprcv;
+    lfd_m[nfd].sessionpointer=s;
+    lfd_m[nfd].saddr.sin_family=AF_INET;
+    lfd_m[nfd].saddr.sin_addr=srcip;
+    lfd_m[nfd].saddr.sin_port=ntohs(client_port+1);
+    lfd_m[nfd].lastact=now;
+    nfd++; 
+
+    udp_recv_port+=2;
     return 1;
 }
 
@@ -356,36 +379,35 @@ int handle_setup(char *line[],struct in_addr srcip)
     for(i=1;;) // search transport headers
     {
 	i=search_header(line,"transport",i);
-        if (i>0) 
-        {
-	    if (strcasestr(line[i],"multicast")) remove_header(line,i);
-	    else 
+        if (i<0) break; 
+
+	if (strcasestr(line[i],"multicast")) remove_header(line,i);
+	else 
+	{
+    	    *newtransport=0;
+	    strcpy(newtransport,"Transport:");
+	    part=strtok(line[i]+10,";");
+	    while(part)
 	    {
-    	    	*newtransport=0;
-		strcpy(newtransport,"Transport:");
-		part=strtok(line[i]+10,";");
-		while(part)
+		if (!strncasecmp(part,"client_port=",12)) 
 		{
-		    if (!strncasecmp(part,"client_port=",12)) 
-		    {
-		        if (debug>1) fprintf(stderr,"Found client_port: %s\n",part);
-			client_port=atol(part+12); // takes first port number from range 
-						   // BTW what's the range for ?
+		    if (debug>1) fprintf(stderr,"Found client_port: %s\n",part);
+		    client_port=atol(part+12); // takes first port number from range 
+					       // BTW what's the range for ?
 
-			if (s->client_port<0) s->client_port=client_port;
-			if (s->recv_port<0) start_udp_proxy(s);
-			sprintf(parameter,"client_port=%d",s->recv_port);
+		    if (s->client_port<0) { s->client_port=client_port; }
+		    if (s->recv_port<0) start_udp_proxy(s,s->srcip,client_port);
+		    sprintf(parameter,"client_port=%d-%d",s->recv_port,s->recv_port+1);
 
-		        strcat(newtransport,parameter); strcat(newtransport,";"); 
-		    }
-		    else { strcat(newtransport,part); strcat(newtransport,";"); }
-		    part=strtok(NULL,";");
+		    strcat(newtransport,parameter); strcat(newtransport,";"); 
 		}
-		strcpy(line[i],newtransport);
-		i++;
+		else { strcat(newtransport,part); strcat(newtransport,";"); }
+		part=strtok(NULL,";");
 	    }
-    	} 
-	else break;
+	    free(line[i]);
+	    line[i]=strdup(newtransport);
+	    i++;
+    	}
     }
 
     return 1;
@@ -413,7 +435,7 @@ void handle_teardown(char *line[])
 char *translate_request(char *s,struct in_addr srcip)
 {
     static char out[MAXREQUESTLEN+30];
-    char *line[100];
+    char *line[100],*thisline;
     regex_t top_regex;
     regmatch_t match[5];
     int i,ln,ret;
@@ -423,10 +445,11 @@ char *translate_request(char *s,struct in_addr srcip)
 
     for (ln=0,p=s;ln<=99;ln++)		// split request up into lines
     {
-        line[ln]=p;
+        thisline=p;
 	for (;*p && *p!='\r' && *p!='\n';p++);
 	if (!*p) break;
 	*p=0;
+        line[ln]=strdup(thisline);
 	p++;
 	if (*p=='\r' || *p=='\n') p++;
     }
@@ -448,7 +471,7 @@ char *translate_request(char *s,struct in_addr srcip)
     	    strcat(out,"\r\n");
 	}
     }
-    else { fprintf(stderr,"Top request line match failed\n"); return NULL; }
+    else { strcpy(out,line[0]); }
 
     if (!strncmp(line[0],"SETUP ",6)) 
 	if (handle_setup(line,srcip)<0) return NULL; 
@@ -456,12 +479,15 @@ char *translate_request(char *s,struct in_addr srcip)
     if (!strncmp(line[0],"PLAY ",5)) handle_play(line);
     if (!strncmp(line[0],"TEARDOWN ",9)) handle_teardown(line);
 
+    free(line[0]);
     for (i=1;;i++)
     {
 	strcat(out,line[i]);
         strcat(out,"\r\n");
 	if (!*(line[i])) break;
+        free(line[i]);
     }
+    free(line[i]);
 
     regfree(&top_regex);
     return *out?out:s;
@@ -524,10 +550,7 @@ void poll_loop(int accsock)
     {
         nret=poll(lfd,nfd,2000);
         time(&now);
-printf("nfd: %d\n",nfd);
-for(i=0;i<nfd;i++) printf("  %d(%d) ",lfd[i].fd,lfd_m[i].type);
-puts("");
-	if (debug>1) dump_sessions();
+	// if (debug>1) dump_sessions();
         switch(nret)
         {
             case 0:     // timeout
@@ -588,11 +611,8 @@ puts("");
 			if (lfd_m[i].type==f_udprcv)
 			{
     			    len = recv(lfd[i].fd, lfd_m[i].inbuf, MAXREQUESTLEN, 0);
-                	    if (debug>1)
-    			    {
-				lfd_m[i].inbuf[len]=0;
-    				fprintf(stderr,"----------------------- udp bytes:%d\n",len);
-    			    }
+                	    if (debug>2) fprintf(stderr,"----------------------- udp bytes:%d\n",len);
+			    sendto(lfd[i].fd,lfd_m[i].inbuf,len,0,&lfd_m[i].saddr,sizeof(lfd_m[i].saddr));
 			    continue;
 			}
 
@@ -606,10 +626,10 @@ puts("");
 				lfd_m[i].inbuf[lfd_m[i].inbuf_offset+len]=0;
 			    	if (req_complete(lfd_m[i].inbuf))
 			    	{
-			            if (debug>1) fprintf(stderr,"------------------- new req\n%s",lfd_m[i].inbuf);
+			            if (debug>1) fprintf(stderr,"------------------- new req\n%s------------------\n",lfd_m[i].inbuf);
 				    translated=translate_request(lfd_m[i].inbuf,lfd_m[i].srcip);
 				    if (!translated) { dropconnection(i,5); continue; }
-			            if (debug>1) fprintf(stderr,"------------------- converted req\n%s",translated);
+			            if (debug>1) fprintf(stderr,"------------------- converted req\n%s------------\n",translated);
                             	    write(lfd[i+1].fd,translated,strlen(translated));
 				    lfd_m[i].inbuf_offset=0;
 			        } else
@@ -638,8 +658,9 @@ puts("");
                     } else i++;
                 }
         }
-        if (lastcollect<now-5)
+        if (lastcollect<now-10)
         {
+	   dump_sessions();
            if (debug>2) fprintf(stderr,"dropping sessions older than %d seconds\n",idletimeout);
            for (i=1;i<nfd;) 
                 if (lfd_m[i].type==f_client && lfd_m[i].lastact+idletimeout<now) dropconnection(i,1); 
