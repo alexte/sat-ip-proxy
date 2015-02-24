@@ -673,7 +673,6 @@ void poll_loop(int accsock)
                     }
                 }
         }
-	cleanup_lfd();
         if (lastcollect<now-10)
         {
 	   dump_sessions();
@@ -683,6 +682,7 @@ void poll_loop(int accsock)
                 else i++;
            lastcollect=now;
         }
+	cleanup_lfd();
     }
 }
 
