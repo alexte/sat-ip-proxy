@@ -123,6 +123,24 @@ void dump_sessions()
 	fprintf(stderr,"%d  id:%s ip:%s cseq:%s\n",i, session[i].id, inet_ntoa(session[i].srcip), session[i].cseq);
 }
 
+int open_udp(char *srvip,int port)
+{
+    struct sockaddr_in sin={AF_INET};
+    struct hostent *phent;
+    int s;
+
+    phent=gethostbyname(srvip);
+    if (phent==NULL) { fprintf(stderr,"gethostbyname(%s) failed\n",srvip); return -1;  }
+    memmove(&sin.sin_addr,phent->h_addr,sizeof(sin.sin_addr));
+    sin.sin_port=htons(port);
+
+    if((s=socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == -1) { perror("socket failed"); return -1; }
+
+    if(bind(s,(struct sockaddr*)&sin,sizeof(sin))==-1) { perror("udp socket bind failed"); return -1; }
+
+    return s;
+}
+
 int prepare_socket(char *srvip,char *port)
 {
     struct sockaddr_in sin={AF_INET};
@@ -257,9 +275,20 @@ char *get_header(char *line[],char *needle)
     return p;
 }
 
-int new_udpport()     // TODO: new ports per session
+int udp_recv_port=15000;
+
+int start_udp_proxy(struct SESSION *s)
 {
-    return 15000;
+    int fd;
+
+    fd=open_udp(srvip,udp_recv_port);
+    if (fd<0) return -1;
+
+    s->udp_fd=fd;
+    s->recv_port=udp_recv_port;
+
+    udp_recv_port++;
+    return 1;
 }
 
 // Sample SETUP Transport
@@ -306,7 +335,7 @@ int handle_setup(char *line[],struct in_addr srcip)
 						   // BTW what's the range for ?
 
 			if (s->client_port<0) s->client_port=client_port;
-			if (s->recv_port<0) s->recv_port=new_udpport();
+			if (s->recv_port<0) start_udp_proxy(s);
 			sprintf(parameter,"client_port=%d",s->recv_port);
 
 		        strcat(newtransport,parameter); strcat(newtransport,";"); 
@@ -321,7 +350,6 @@ int handle_setup(char *line[],struct in_addr srcip)
 	else break;
     }
 
-	// setup udp proxy
     return 1;
 }
 
