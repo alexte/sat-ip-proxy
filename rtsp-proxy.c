@@ -54,6 +54,40 @@ void usage()
 		   "    port: tcp port to listen and connect to rtsp (default 554)\n",prg);
 }
 
+struct pollfd lfd[MAXOPENFDS];
+
+struct LFD_M {
+    char inbuf[MAXREQUESTLEN+1];
+    int inbuf_offset;
+    time_t lastact;
+    enum { f_accept,f_client,f_server,f_udprcv} type;
+    struct SESSION *sessionpointer;
+    struct in_addr srcip;
+} lfd_m[MAXOPENFDS];
+
+int nfd;
+
+void remove_lfd(int n)
+{
+    int i;
+    
+    if (debug>1) fprintf(stderr,"remove_lfd(%d)\n",n);
+
+    for (i=n;i<nfd;i++)
+    {
+	lfd[i]=lfd[i+1];
+	lfd_m[i]=lfd_m[i+1];
+    }
+    nfd--;
+}
+
+void remove_lfd_by_fd(int fd)
+{
+    int i;
+    for (i=0;i<nfd;i++)
+	if(lfd[i].fd==fd) remove_lfd(i);
+}
+
 void bp(char *s)
 { puts(s); fflush(stdout); }
 
@@ -105,6 +139,9 @@ void remove_session(char *id)
     for (i=0;i<nr_sessions;i++)
 	if (!strcmp(session[i].id,p)) break;
     if (i>=nr_sessions) return;
+
+    if (session[i].udp_fd>=0) close(session[i].udp_fd);
+    remove_lfd_by_fd(session[i].udp_fd);
 
     free(session[i].id);
     free(session[i].cseq);
@@ -212,29 +249,21 @@ int connect_server()
     return s;
 }
 
-struct pollfd lfd[MAXOPENFDS];
-char inbuf[MAXOPENFDS][MAXREQUESTLEN+1];
-int inbuf_offset[MAXOPENFDS];
-time_t lastact[MAXOPENFDS];
-int is_client[MAXOPENFDS];
-struct in_addr srcip[MAXOPENFDS];
-int nfd;
-
 char *reasonstr[]={"OK","Timeout","Hangup","Request to long","Server not reachable","Request Translation Failed"};
 
 void dropconnection(int n,int reason)
 {
-    int i;
+    if (lfd_m[n].type==f_udprcv) { fprintf(stderr,"dropconnection not allowed for udp session\n"); return; }
 
-    if (!is_client[n]) n--;	// drop client and server connection, select client first
+    if (lfd_m[n].type==f_server) n--;	// drop client and server connection, select client first
     if (debug)
     {
-        fprintf(stderr,"%ld disconnect from %s: %s (%d/%d)\n",now,inet_ntoa(srcip[n]),reasonstr[reason],n,nfd);
+        fprintf(stderr,"%ld disconnect from %s: %s (%d/%d)\n",now,inet_ntoa(lfd_m[n].srcip),reasonstr[reason],n,nfd);
     }
     close(lfd[n].fd);
-    close(lfd[n+1].fd);
-    for(i=n;i<nfd;i++) lfd[i]=lfd[i+2];
-    nfd--; nfd--;
+    remove_lfd(n);
+    close(lfd[n].fd);
+    remove_lfd(n);
 }
 
 int req_complete(char *s)
@@ -281,11 +310,20 @@ int start_udp_proxy(struct SESSION *s)
 {
     int fd;
 
+    if (nfd>=MAXOPENFDS-1) { fprintf(stderr,"Maxumum FDS reached"); return -1; }
     fd=open_udp(srvip,udp_recv_port);
     if (fd<0) return -1;
 
     s->udp_fd=fd;
     s->recv_port=udp_recv_port;
+
+    lfd[nfd].fd=fd;
+    lfd[nfd].events=POLLIN|POLLPRI;
+    lfd[nfd].revents=0;
+    lfd_m[nfd].type=f_udprcv;
+    lfd_m[nfd].sessionpointer=s;
+    lfd_m[nfd].lastact=now;
+    nfd++; 
 
     udp_recv_port++;
     return 1;
@@ -416,7 +454,7 @@ char *translate_request(char *s,struct in_addr srcip)
 	if (handle_setup(line,srcip)<0) return NULL; 
 
     if (!strncmp(line[0],"PLAY ",5)) handle_play(line);
-    if (!strncmp(line[0],"TEARDOWN ",8)) handle_teardown(line);
+    if (!strncmp(line[0],"TEARDOWN ",9)) handle_teardown(line);
 
     for (i=1;;i++)
     {
@@ -476,7 +514,8 @@ void poll_loop(int accsock)
     lfd[0].fd=accsock;
     lfd[0].events=POLLIN|POLLPRI;
     lfd[0].revents=0;
-    lastact[0]=now;
+    lfd_m[0].lastact=now;
+    lfd_m[0].type=f_accept;
     nfd=1;
 
     lastcollect=now;
@@ -485,6 +524,9 @@ void poll_loop(int accsock)
     {
         nret=poll(lfd,nfd,2000);
         time(&now);
+printf("nfd: %d\n",nfd);
+for(i=0;i<nfd;i++) printf("  %d(%d) ",lfd[i].fd,lfd_m[i].type);
+puts("");
 	if (debug>1) dump_sessions();
         switch(nret)
         {
@@ -511,10 +553,10 @@ void poll_loop(int accsock)
                         lfd[nfd].fd=newfd;
                         lfd[nfd].events=POLLIN|POLLPRI;
                         lfd[nfd].revents=0;
-			is_client[nfd]=TRUE;
-			inbuf_offset[nfd]=0;
-                        lastact[nfd]=now;
-                        srcip[nfd]=sin.sin_addr;
+			lfd_m[nfd].type=f_client;
+			lfd_m[nfd].inbuf_offset=0;
+                        lfd_m[nfd].lastact=now;
+                        lfd_m[nfd].srcip=sin.sin_addr;
                         nfd++; nc++;
 
 			newfd=connect_server();	 	// connect to server immediately
@@ -529,68 +571,78 @@ void poll_loop(int accsock)
 			    lfd[nfd].fd=newfd;		 // connect to server immediately
 			    lfd[nfd].events=POLLIN|POLLPRI;
 			    lfd[nfd].revents=0;
-                            lastact[nfd]=now;
-			    is_client[nfd]=FALSE;
-			    inbuf_offset[nfd]=0;
+                            lfd_m[nfd].lastact=now;
+			    lfd_m[nfd].type=f_server;
+			    lfd_m[nfd].inbuf_offset=0;
 			    nfd++; 
 			}
                     }
                 }
-                for(i=1;i<nfd && nret>0;i++)                     // data coming in ?
+                for(i=1;i<nfd && nret>0;)                     // data coming in ?
                 {
                     if (lfd[i].revents) nret--;
-                    if (lfd[i].revents&POLLHUP) dropconnection(i,2);
-                    if (lfd[i].revents&POLLERR) dropconnection(i,2);
-                    if (lfd[i].revents&POLLNVAL) dropconnection(i,2);
-                    if (lfd[i].revents&POLLIN) 
+                    if (lfd[i].revents&(POLLHUP|POLLERR|POLLNVAL)) { fprintf(stderr,"HUP/ERR/NVAL %d\n",lfd[i].fd); dropconnection(i,2); }
+                    else if (lfd[i].revents&POLLIN) 
                     {
-                        len=read(lfd[i].fd,inbuf[i]+inbuf_offset[i],MAXREQUESTLEN-inbuf_offset[i]);
+			lfd[i].revents=0;
+			if (lfd_m[i].type==f_udprcv)
+			{
+    			    len = recv(lfd[i].fd, lfd_m[i].inbuf, MAXREQUESTLEN, 0);
+                	    if (debug>1)
+    			    {
+				lfd_m[i].inbuf[len]=0;
+    				fprintf(stderr,"----------------------- udp bytes:%d\n",len);
+    			    }
+			    continue;
+			}
+
+                        len=read(lfd[i].fd,lfd_m[i].inbuf+lfd_m[i].inbuf_offset,MAXREQUESTLEN-lfd_m[i].inbuf_offset);
                         if (len<=0) dropconnection(i,2);
                         else
                         {
-                            lastact[i]=now;
-			    if (is_client[i])
+                            lfd_m[i].lastact=now;
+			    if (lfd_m[i].type==f_client)
                             { 							// collect data up to a full rtsp request
-				inbuf[i][inbuf_offset[i]+len]=0;
-			    	if (req_complete(inbuf[i]))
+				lfd_m[i].inbuf[lfd_m[i].inbuf_offset+len]=0;
+			    	if (req_complete(lfd_m[i].inbuf))
 			    	{
-			            if (debug>1) fprintf(stderr,"------------------- new req\n%s",inbuf[i]);
-				    translated=translate_request(inbuf[i],srcip[i]);
+			            if (debug>1) fprintf(stderr,"------------------- new req\n%s",lfd_m[i].inbuf);
+				    translated=translate_request(lfd_m[i].inbuf,lfd_m[i].srcip);
 				    if (!translated) { dropconnection(i,5); continue; }
 			            if (debug>1) fprintf(stderr,"------------------- converted req\n%s",translated);
                             	    write(lfd[i+1].fd,translated,strlen(translated));
-				    inbuf_offset[i]=0;
+				    lfd_m[i].inbuf_offset=0;
 			        } else
 			        {
-				    inbuf_offset[i]+=len;
-                                    if (inbuf_offset[i]>=MAXREQUESTLEN-1) dropconnection(i,3);
+				    lfd_m[i].inbuf_offset+=len;
+                                    if (lfd_m[i].inbuf_offset>=MAXREQUESTLEN-1) dropconnection(i,3);
 			        }
 			    }
-			    else
+			    else if (lfd_m[i].type==f_server)
 			    {
-				if (!strncmp(inbuf[i],"RTSP/1.0 200",12))
+				if (!strncmp(lfd_m[i].inbuf,"RTSP/1.0 200",12))
 				{
-				    inbuf[i][len]=0;
-				    translated=translate_response(inbuf[i]);
+				    lfd_m[i].inbuf[len]=0;
+				    translated=translate_response(lfd_m[i].inbuf);
 				    if (!translated) { dropconnection(i,5); continue; }
 				    write(lfd[i-1].fd,translated,strlen(translated));
 				}
-				else write(lfd[i-1].fd,inbuf[i],len);
+				else write(lfd[i-1].fd,lfd_m[i].inbuf,len);
 				if (debug>1)
 				{
-				    inbuf[i][len]=0;
-				    fprintf(stderr,"----------------------- res\n%s",inbuf[i]);
+				    lfd_m[i].inbuf[len]=0;
+				    fprintf(stderr,"----------------------- res\n%s",lfd_m[i].inbuf);
 				}
-	 		    }
-                        }
-                    }
+			    } else fprintf(stderr,"unknown lfd type. ignored");
+			}
+                    } else i++;
                 }
         }
         if (lastcollect<now-5)
         {
            if (debug>2) fprintf(stderr,"dropping sessions older than %d seconds\n",idletimeout);
            for (i=1;i<nfd;) 
-                if (lastact[i]+idletimeout<now) dropconnection(i,1); 
+                if (lfd_m[i].type==f_client && lfd_m[i].lastact+idletimeout<now) dropconnection(i,1); 
                 else i++;
            lastcollect=now;
         }
