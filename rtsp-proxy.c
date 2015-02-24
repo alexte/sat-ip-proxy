@@ -65,22 +65,32 @@ struct LFD_M {
     struct SESSION *sessionpointer;
     struct in_addr srcip;
     struct sockaddr_in saddr;
+    int deleted;
 } lfd_m[MAXOPENFDS];
 
 int nfd;
 
-void remove_lfd(int n)
+void remove_lfd(int n)  	// mark as deleted first, cleanup later, to keep fd array 
 {
-    int i;
-    
     if (debug>1) fprintf(stderr,"remove_lfd(%d)\n",n);
+    lfd_m[n].deleted=TRUE;
+}
 
-    for (i=n;i<nfd;i++)
+void cleanup_lfd()
+{
+    int i,move=0;
+    
+    for (i=0;i<nfd;)
     {
-	lfd[i]=lfd[i+1];
-	lfd_m[i]=lfd_m[i+1];
+	if (move>0) 
+	{
+	    lfd[i]=lfd[i+move];
+	    lfd_m[i]=lfd_m[i+move];
+	}
+        if (lfd_m[i].deleted) move++;
+	else i++;
     }
-    nfd--;
+    nfd-=move;
 }
 
 void remove_lfd_by_fd(int fd)
@@ -265,8 +275,8 @@ void dropconnection(int n,int reason)
     }
     close(lfd[n].fd);
     remove_lfd(n);
-    close(lfd[n].fd);
-    remove_lfd(n);
+    close(lfd[n+1].fd);
+    remove_lfd(n+1);
 }
 
 int req_complete(char *s)
@@ -331,6 +341,7 @@ int start_udp_proxy(struct SESSION *s,struct in_addr srcip,int client_port)
     lfd_m[nfd].saddr.sin_addr=srcip;
     lfd_m[nfd].saddr.sin_port=ntohs(client_port);
     lfd_m[nfd].lastact=now;
+    lfd_m[nfd].deleted=FALSE;
     nfd++; 
 
     fd=open_udp(srvip,udp_recv_port+1);
@@ -346,6 +357,7 @@ int start_udp_proxy(struct SESSION *s,struct in_addr srcip,int client_port)
     lfd_m[nfd].saddr.sin_addr=srcip;
     lfd_m[nfd].saddr.sin_port=ntohs(client_port+1);
     lfd_m[nfd].lastact=now;
+    lfd_m[nfd].deleted=FALSE;
     nfd++; 
 
     udp_recv_port+=2;
@@ -542,6 +554,7 @@ void poll_loop(int accsock)
     lfd[0].revents=0;
     lfd_m[0].lastact=now;
     lfd_m[0].type=f_accept;
+    lfd_m[0].deleted=FALSE;
     nfd=1;
 
     lastcollect=now;
@@ -580,6 +593,7 @@ void poll_loop(int accsock)
 			lfd_m[nfd].inbuf_offset=0;
                         lfd_m[nfd].lastact=now;
                         lfd_m[nfd].srcip=sin.sin_addr;
+                        lfd_m[nfd].deleted=FALSE;
                         nfd++; nc++;
 
 			newfd=connect_server();	 	// connect to server immediately
@@ -597,11 +611,12 @@ void poll_loop(int accsock)
                             lfd_m[nfd].lastact=now;
 			    lfd_m[nfd].type=f_server;
 			    lfd_m[nfd].inbuf_offset=0;
+                            lfd_m[nfd].deleted=FALSE;
 			    nfd++; 
 			}
                     }
                 }
-                for(i=1;i<nfd && nret>0;)                     // data coming in ?
+                for(i=1;i<nfd && nret>0;i++)                     // data coming in ?
                 {
                     if (lfd[i].revents) nret--;
                     if (lfd[i].revents&(POLLHUP|POLLERR|POLLNVAL)) { fprintf(stderr,"HUP/ERR/NVAL %d\n",lfd[i].fd); dropconnection(i,2); }
@@ -655,9 +670,10 @@ void poll_loop(int accsock)
 				}
 			    } else fprintf(stderr,"unknown lfd type. ignored");
 			}
-                    } else i++;
+                    }
                 }
         }
+	cleanup_lfd();
         if (lastcollect<now-10)
         {
 	   dump_sessions();
