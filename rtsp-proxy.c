@@ -40,7 +40,7 @@ time_t now;
 struct SESSION {
     char *id;
     char *cseq;
-    struct in_addr srcip;
+    struct in_addr client_ip;
     int client_port;
     int recv_port;
     int lastuse;
@@ -63,7 +63,7 @@ struct LFD_M {
     time_t lastact;
     enum { f_accept,f_client,f_server,f_udprcv} type;
     struct SESSION *sessionpointer;
-    struct in_addr srcip;
+    struct in_addr client_ip;
     struct sockaddr_in saddr;
     int deleted;
 } lfd_m[MAXOPENFDS];
@@ -103,13 +103,13 @@ void remove_lfd_by_fd(int fd)
 void bp(char *s)
 { puts(s); fflush(stdout); }
 
-struct SESSION *start_session(struct in_addr srcip,char *cseq)
+struct SESSION *start_session(struct in_addr client_ip,char *cseq)
 {
     int n=nr_sessions;
 
     if (n>=MAXSESSIONS) return NULL;
     nr_sessions++;
-    session[n].srcip=srcip;
+    session[n].client_ip=client_ip;
     session[n].id=NULL;
     session[n].cseq=strdup(cseq);
     if (!session[n].cseq) return NULL;
@@ -170,7 +170,7 @@ void dump_sessions()
 
     if (nr_sessions>0) puts("\nSessions:");
     for (i=0;i<nr_sessions;i++)
-	fprintf(stderr,"%d  id:%s ip:%s cseq:%s\n",i, session[i].id, inet_ntoa(session[i].srcip), session[i].cseq);
+	fprintf(stderr,"%d  id:%s ip:%s cseq:%s\n",i, session[i].id, inet_ntoa(session[i].client_ip), session[i].cseq);
 }
 
 int open_udp(char *srvip,int port)
@@ -271,7 +271,7 @@ void dropconnection(int n,int reason)
     if (lfd_m[n].type==f_server) n--;	// drop client and server connection, select client first
     if (debug)
     {
-        fprintf(stderr,"%ld disconnect from %s: %s (%d/%d)\n",now,inet_ntoa(lfd_m[n].srcip),reasonstr[reason],n,nfd);
+        fprintf(stderr,"%ld disconnect from %s: %s (%d/%d)\n",now,inet_ntoa(lfd_m[n].client_ip),reasonstr[reason],n,nfd);
     }
     close(lfd[n].fd);
     remove_lfd(n);
@@ -320,7 +320,7 @@ char *get_header(char *line[],char *needle)
 
 int udp_recv_port=15000;
 
-int start_udp_proxy(struct SESSION *s,struct in_addr srcip,int client_port)
+int start_udp_proxy(struct SESSION *s,struct in_addr client_ip,int client_port)
 {
     int fd;
 
@@ -338,7 +338,7 @@ int start_udp_proxy(struct SESSION *s,struct in_addr srcip,int client_port)
     lfd_m[nfd].type=f_udprcv;
     lfd_m[nfd].sessionpointer=s;
     lfd_m[nfd].saddr.sin_family=AF_INET;
-    lfd_m[nfd].saddr.sin_addr=srcip;
+    lfd_m[nfd].saddr.sin_addr=client_ip;
     lfd_m[nfd].saddr.sin_port=ntohs(client_port);
     lfd_m[nfd].lastact=now;
     lfd_m[nfd].deleted=FALSE;
@@ -354,7 +354,7 @@ int start_udp_proxy(struct SESSION *s,struct in_addr srcip,int client_port)
     lfd_m[nfd].type=f_udprcv;
     lfd_m[nfd].sessionpointer=s;
     lfd_m[nfd].saddr.sin_family=AF_INET;
-    lfd_m[nfd].saddr.sin_addr=srcip;
+    lfd_m[nfd].saddr.sin_addr=client_ip;
     lfd_m[nfd].saddr.sin_port=ntohs(client_port+1);
     lfd_m[nfd].lastact=now;
     lfd_m[nfd].deleted=FALSE;
@@ -368,7 +368,7 @@ int start_udp_proxy(struct SESSION *s,struct in_addr srcip,int client_port)
 //   Example C>S: Transport:RTP/AVP;unicast;client_port=5000-5001
 //   Example S>C: Transport: RTP/AVP;unicast;destination=192.168.45.1;source=192.168.45.40;client_port=5000-5001;server_port=6976-6977
 
-int handle_setup(char *line[],struct in_addr srcip)
+int handle_setup(char *line[],struct in_addr client_ip)
 {
     int i,client_port=-1;
     char *sessionid,*part,*cseq;
@@ -383,7 +383,7 @@ int handle_setup(char *line[],struct in_addr srcip)
         cseq=get_header(line,"cseq");
     	if (cseq==NULL) return -1;
         s=get_session_by_cseq(cseq);
-	if (!s) s=start_session(srcip,cseq);
+	if (!s) s=start_session(client_ip,cseq);
     }
     if (!s) return -1;
 
@@ -408,7 +408,7 @@ int handle_setup(char *line[],struct in_addr srcip)
 					       // BTW what's the range for ?
 
 		    if (s->client_port<0) { s->client_port=client_port; }
-		    if (s->recv_port<0) start_udp_proxy(s,s->srcip,client_port);
+		    if (s->recv_port<0) start_udp_proxy(s,s->client_ip,client_port);
 		    sprintf(parameter,"client_port=%d-%d",s->recv_port,s->recv_port+1);
 
 		    strcat(newtransport,parameter); strcat(newtransport,";"); 
@@ -444,7 +444,7 @@ void handle_teardown(char *line[])
     if (id) remove_session(id);
 }
 
-char *translate_request(char *s,struct in_addr srcip)
+char *translate_request(char *s,struct in_addr client_ip)
 {
     static char out[MAXREQUESTLEN+30];
     char *line[100],*thisline;
@@ -486,7 +486,7 @@ char *translate_request(char *s,struct in_addr srcip)
     else { strcpy(out,line[0]); }
 
     if (!strncmp(line[0],"SETUP ",6)) 
-	if (handle_setup(line,srcip)<0) return NULL; 
+	if (handle_setup(line,client_ip)<0) return NULL; 
 
     if (!strncmp(line[0],"PLAY ",5)) handle_play(line);
     if (!strncmp(line[0],"TEARDOWN ",9)) handle_teardown(line);
@@ -507,36 +507,55 @@ char *translate_request(char *s,struct in_addr srcip)
 
 char *translate_response(char *s_in)
 {
-    char *cseq,*sessionid,*line[100];
-    int ln;
+    char *cseq,*sessionid;
+    char *line[100];
+    static char out[MAXREQUESTLEN+30];
+    int ln,i;
     char *p,*s;
-    struct SESSION *sess;
+    struct SESSION *sess=NULL;
 
     s=strdup(s_in);
-    if (!s) { perror("out of memory"); exit(1); }
-    for (ln=0,p=s;ln<=99;ln++)		// split request up into lines
+    if(!s) { perror("out of memory"); exit(1); }
+
+    for (ln=0,p=s;*p && ln<=99;ln++)		// split request up into lines
     {
         line[ln]=p;
 	for (;*p && *p!='\r' && *p!='\n';p++);
-	if (!*p) break;
+	if (!*p) continue;
 	*p=0;
 	p++;
 	if (*p=='\r' || *p=='\n') p++;
     }
-    if (ln>99) { fprintf(stderr,"Too many header header lines in response\n"); return NULL; }
+    if (ln>99) { fprintf(stderr,"Too many header header lines in response\n"); free(s); return NULL; }
 
     cseq=get_header(line,"cseq");
     sessionid=get_header(line,"session");
 
     if (cseq && sessionid)
     {
-	if (get_session(sessionid)) { free(s); return s_in; }
-	sess=get_session_by_cseq(cseq);
-	if (!sess) { free(s); return s_in; }
-	sess->id=strdup(sessionid);
+	if (!(sess=get_session(sessionid)))  			// new session
+	{
+	    sess=get_session_by_cseq(cseq);   		// search corresponding SETUP request
+	    if (sess) sess->id=strdup(sessionid); 	// set sessionid
+	}
     }
-	// TODO: we should change the transport: header accordingly
-    free(s); return s_in;
+
+    if (!get_header(line,"transport")) { free(s); return s_in; }
+
+    *out=0;
+    for(i=0;i<ln;i++)
+    {
+	if(sess && !strncasecmp(line[i],"transport:",10))
+	{
+	    sprintf(out+strlen(out),"Transport: RTP/AVP;unicast;destination=%s;source=%s;"
+		"client_port=%d-%d;server_port=%d-%d\r\n",
+		inet_ntoa(sess->client_ip),srvip,sess->client_port,sess->client_port+1,
+		sess->recv_port,sess->recv_port+1);
+	}
+	else { strcat(out,line[i]); strcat(out,"\r\n"); }
+    }
+    free(s);
+    return out;
 }
 
 void poll_loop(int accsock)
@@ -592,7 +611,7 @@ void poll_loop(int accsock)
 			lfd_m[nfd].type=f_client;
 			lfd_m[nfd].inbuf_offset=0;
                         lfd_m[nfd].lastact=now;
-                        lfd_m[nfd].srcip=sin.sin_addr;
+                        lfd_m[nfd].client_ip=sin.sin_addr;
                         lfd_m[nfd].deleted=FALSE;
                         nfd++; nc++;
 
@@ -642,7 +661,7 @@ void poll_loop(int accsock)
 			    	if (req_complete(lfd_m[i].inbuf))
 			    	{
 			            if (debug>1) fprintf(stderr,"------------------- new req\n%s------------------\n",lfd_m[i].inbuf);
-				    translated=translate_request(lfd_m[i].inbuf,lfd_m[i].srcip);
+				    translated=translate_request(lfd_m[i].inbuf,lfd_m[i].client_ip);
 				    if (!translated) { dropconnection(i,5); continue; }
 			            if (debug>1) fprintf(stderr,"------------------- converted req\n%s------------\n",translated);
                             	    write(lfd[i+1].fd,translated,strlen(translated));
@@ -660,13 +679,17 @@ void poll_loop(int accsock)
 				    lfd_m[i].inbuf[len]=0;
 				    translated=translate_response(lfd_m[i].inbuf);
 				    if (!translated) { dropconnection(i,5); continue; }
+				    if (debug>1) fprintf(stderr,"----------------------- translated res\n%s",translated);
 				    write(lfd[i-1].fd,translated,strlen(translated));
 				}
-				else write(lfd[i-1].fd,lfd_m[i].inbuf,len);
-				if (debug>1)
+				else
 				{
-				    lfd_m[i].inbuf[len]=0;
-				    fprintf(stderr,"----------------------- res\n%s",lfd_m[i].inbuf);
+				    if (debug>1)
+				    {
+				        lfd_m[i].inbuf[len]=0;
+				        fprintf(stderr,"----------------------- res\n%s",lfd_m[i].inbuf);
+				    }
+				    write(lfd[i-1].fd,lfd_m[i].inbuf,len);
 				}
 			    } else fprintf(stderr,"unknown lfd type. ignored");
 			}
