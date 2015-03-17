@@ -24,6 +24,7 @@
 #define MAXOPENFDS 2000
 #define MAXREQUESTLEN 2000
 #define MAXSESSIONS 300
+#define MAXPIDS 100
 
 #define TRUE 1
 #define FALSE 0
@@ -41,6 +42,8 @@ struct SESSION {
     char *id;
     char *cseq;
     struct in_addr client_ip;
+    int pid[MAXPIDS];
+    int npids;
     int client_port;
     int recv_port;
     int lastuse;
@@ -75,6 +78,8 @@ void remove_lfd(int n)  	// mark as deleted first, cleanup later, to keep fd arr
     if (debug>1) fprintf(stderr,"remove_lfd(%d)\n",n);
     lfd_m[n].deleted=TRUE;
 }
+
+void dump_sessions();
 
 void cleanup_lfd()
 {
@@ -118,6 +123,7 @@ struct SESSION *start_session(struct in_addr client_ip,char *cseq)
     session[n].lastuse=now;
     session[n].udp_fd=-1;
     session[n].udp2_fd=-1;
+    session[n].npids=0;
     return &session[n];
 }
 
@@ -166,11 +172,40 @@ void remove_session(char *id)
 
 void dump_sessions()
 {
-    int i;
+    int i,j;
+    struct SESSION *s;
 
     if (nr_sessions>0) puts("\nSessions:");
     for (i=0;i<nr_sessions;i++)
-	fprintf(stderr,"%d  id:%s ip:%s cseq:%s\n",i, session[i].id, inet_ntoa(session[i].client_ip), session[i].cseq);
+    {
+	s=&session[i];
+	fprintf(stderr,"%d  id:%s ip:%s cseq:%s pids:",i, session[i].id, inet_ntoa(session[i].client_ip), session[i].cseq);
+        for (j=0;j<s->npids;j++)
+	    fprintf(stderr,"%d ",s->pid[j]);
+	puts("\n");
+    }
+}
+
+void add_pids(struct SESSION *s,char *pidstr)
+{
+    char *p,*ep;
+    int pid;
+    
+    for(p=pidstr;*p;)
+    {
+	if (s->npids>=MAXPIDS) { fprintf(stderr,"MAXPIDS erreicht\n"); return; }
+	pid=strtol(p,&ep,10);
+	if (ep==p) break;
+	s->pid[s->npids]=pid; s->npids++;
+	if (*ep==',') { p=ep+1; continue; }
+	break;
+    }
+}
+
+void set_pids(struct SESSION *s,char *pidstr)
+{
+    s->npids=0;
+    add_pids(s,pidstr);
 }
 
 int open_udp(char *srvip,int port)
@@ -405,7 +440,7 @@ int handle_setup(char *line[],struct in_addr client_ip)
 		{
 		    if (debug>1) fprintf(stderr,"Found client_port: %s\n",part);
 		    client_port=atol(part+12); // takes first port number from range 
-					       // BTW what's the range for ?
+					       // sat>ip uses to ports: ts and tuner_info
 
 		    if (s->client_port<0) { s->client_port=client_port; }
 		    if (s->recv_port<0) start_udp_proxy(s,s->client_ip,client_port);
@@ -427,13 +462,35 @@ int handle_setup(char *line[],struct in_addr client_ip)
 
 void handle_play(char *line[])
 {
-    char *id;
+    char *id,*p,*qs,*att;
     struct SESSION *s;
 	// get session header
     id=get_header(line,"Session");
     s=get_session(id);
+
     if (s && s->cseq)  // remove old cseq when session is allready set
     { free(s->cseq); s->cseq=NULL; }
+
+    // Sample Play Requests:  
+    //	PLAY rtsp://192.168.0.1:554/stream=12?pids=0,18,20 RTSP/1.0
+    //	PLAY rtsp://192.168.0.1:554/stream=12?addpids=1028 RTSP/1.0
+
+
+    for(p=line[0];*p && *p!='?';p++);
+    
+    if (!*p) return;  // PLAY request without QS ?
+
+    qs=strdup(p+1);
+    if (!qs) { perror("out of memory"); exit(1); }
+
+    att=strtok(qs,"&");
+    while (att)
+    {
+		// TODO: we should use the streamid in SETUP Response and PLAY Request for multi stream sessions
+	if (!strncmp(att,"pids=",5)) set_pids(s,att+5);
+	if (!strncmp(att,"addpids=",8)) add_pids(s,att+8);
+    	att=strtok(NULL,"&");
+    }
 }
 
 void handle_teardown(char *line[])
