@@ -341,6 +341,8 @@ int search_header(char *line[],char *needle,int start)
     return -1;
 }
 
+// get header content from request/response headers by header name
+// headers are unchanged
 char *get_header(char *line[],char *needle)
 {
     int i;
@@ -351,6 +353,24 @@ char *get_header(char *line[],char *needle)
 
     for(p=line[i]+strlen(needle)+1;*p && *p==' ';p++);
     return p;
+}
+
+// extracts session id from request headers without additional parameters
+// string gets overwriten with every call, so copy it if needed later
+// original header is unchanged
+char *get_sessionid(char *line[])
+{
+    static char sessionid[50];
+    char *h;
+    int i;
+
+    h=get_header(line,"session");
+    if (!h) return NULL;
+
+    for(i=0;i<49 && h[i] && h[i]!=' ' && h[i]!=';';i++) sessionid[i]=h[i];
+    sessionid[i]=0;
+ 
+    return sessionid;
 }
 
 int udp_recv_port=15000;
@@ -411,7 +431,7 @@ int handle_setup(char *line[],struct in_addr client_ip)
     char newtransport[1000],parameter[50];
 
 	// ---------------------------------------- lookup session
-    sessionid=get_header(line,"session");
+    sessionid=get_sessionid(line);
     s=get_session(sessionid);
     if (!s) 
     {
@@ -452,6 +472,8 @@ int handle_setup(char *line[],struct in_addr client_ip)
 		part=strtok(NULL,";");
 	    }
 	    free(line[i]);
+		// Some servers don't like trailing ";" it seems, so remove it
+	    if ((part=strrchr(newtransport,';'))) *part=0;
 	    line[i]=strdup(newtransport);
 	    i++;
     	}
@@ -465,7 +487,7 @@ void handle_play(char *line[])
     char *id,*p,*qs,*att;
     struct SESSION *s;
 	// get session header
-    id=get_header(line,"Session");
+    id=get_sessionid(line);
     s=get_session(id);
 
     if (s && s->cseq)  // remove old cseq when session is allready set
@@ -497,7 +519,7 @@ void handle_teardown(char *line[])
 {
     char *id;
 	// get session header
-    id=get_header(line,"Session");
+    id=get_sessionid(line);
     if (id) remove_session(id);
 }
 
@@ -586,7 +608,7 @@ char *translate_response(char *s_in)
     if (ln>99) { fprintf(stderr,"Too many header header lines in response\n"); free(s); return NULL; }
 
     cseq=get_header(line,"cseq");
-    sessionid=get_header(line,"session");
+    sessionid=get_sessionid(line);
 
     if (cseq && sessionid)
     {
