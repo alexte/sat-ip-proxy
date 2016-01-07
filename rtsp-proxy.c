@@ -69,6 +69,7 @@ struct LFD_M {
     struct in_addr client_ip;
     struct sockaddr_in saddr;
     int deleted;
+    char srvip[16];
 } lfd_m[MAXOPENFDS];
 
 int nfd;
@@ -320,6 +321,19 @@ int req_complete(char *s)
     return FALSE;
 }
 
+int rsp_complete(char *s)
+{
+    char *p, *q;
+    if((p=strstr(s,"\r\n\r\n")))
+    {
+    	int len;
+        if ((q=strcasestr(s,"Content-Length: ")) && sscanf(q+16,"%d\r\n",&len)==1)
+                return strlen(p+4)>=len;
+        return TRUE;
+    }
+    return FALSE;
+}
+
 void remove_header(char *line[],int r)
 {
     int i;
@@ -488,7 +502,7 @@ void handle_play(char *line[])
     struct SESSION *s;
 	// get session header
     id=get_sessionid(line);
-    s=get_session(id);
+    if (!(s=get_session(id))) return;
 
     if (s && s->cseq)  // remove old cseq when session is allready set
     { free(s->cseq); s->cseq=NULL; }
@@ -523,7 +537,33 @@ void handle_teardown(char *line[])
     if (id) remove_session(id);
 }
 
-char *translate_request(char *s,struct in_addr client_ip)
+char *replace_str(char *s,char *srch, char *repl, char *out, int cbout)
+{
+    char *p, *q=out;
+    int iLen1=strlen(srch),iLen2=strlen(repl);
+    
+    if (!(p=strstr(s,srch))) strncpy(out,s,cbout);
+    else {
+    	while (p) {
+	    strncpy(q,s,p-s);
+	    q+=(p-s);
+	    p+=iLen1;
+	    strncpy(q,repl,iLen2);
+	    q+=iLen2;
+	    s=p;
+	    p=strstr(s,srch);
+	}
+	strcpy(q,s);
+    }
+    return out;
+}
+
+char *translate_describe(char *s,int li,char *out,int cbout)
+{
+    return replace_str(s,target,lfd_m[li].srvip,out,cbout);
+}
+
+char *translate_request(char *s,int li)
 {
     static char out[MAXREQUESTLEN+30];
     char *line[100],*thisline;
@@ -560,12 +600,13 @@ char *translate_request(char *s,struct in_addr client_ip)
 	    strcat(out,target);
 	    strcat(out,line[0]+match[1].rm_eo);
     	    strcat(out,"\r\n");
+	    strncpy(lfd_m[li].srvip,line[0]+match[1].rm_so,match[1].rm_eo-match[1].rm_so);
 	}
     }
     else { strcpy(out,line[0]); }
 
     if (!strncmp(line[0],"SETUP ",6)) 
-	if (handle_setup(line,client_ip)<0) return NULL; 
+	if (handle_setup(line,lfd_m[li].client_ip)<0) return NULL; 
 
     if (!strncmp(line[0],"PLAY ",5)) handle_play(line);
     if (!strncmp(line[0],"TEARDOWN ",9)) handle_teardown(line);
@@ -584,13 +625,13 @@ char *translate_request(char *s,struct in_addr client_ip)
     return *out?out:s;
 }
 
-char *translate_response(char *s_in)
+char *translate_response(char *s_in, int li)
 {
     char *cseq,*sessionid;
-    char *line[100];
+    char *line[100],buf[MAXREQUESTLEN];
     static char out[MAXREQUESTLEN+30];
     int ln,i;
-    char *p,*s;
+    char *p,*s,*q;
     struct SESSION *sess=NULL;
 
     s=strdup(s_in);
@@ -619,19 +660,34 @@ char *translate_response(char *s_in)
 	}
     }
 
-    if (!get_header(line,"transport")) { free(s); return s_in; }
-
-    *out=0;
-    for(i=0;i<ln;i++)
+    if (get_header(line,"content-length") && (p=strstr(s_in,"\r\n\r\n")))
     {
-	if(sess && !strncasecmp(line[i],"transport:",10))
-	{
-	    sprintf(out+strlen(out),"Transport: RTP/AVP;unicast;destination=%s;source=%s;"
-		"client_port=%d-%d;server_port=%d-%d\r\n",
-		inet_ntoa(sess->client_ip),srvip,sess->client_port,sess->client_port+1,
-		sess->recv_port,sess->recv_port+1);
+	char body[MAXREQUESTLEN+30];
+
+	translate_describe(p+4,li-1,body,sizeof(body));
+        for(*out=0,i=0,q=out;i<ln&&*line[i];i++)
+        {
+    	    if(!strncasecmp(line[i],"content-length:",15))
+		q+=sprintf(q,"Content-Length: %d\r\n", strlen(body));
+	    else 
+		q+=sprintf(q,"%s\r\n",translate_describe(line[i],li-1,buf,sizeof(buf)));
 	}
-	else { strcat(out,line[i]); strcat(out,"\r\n"); }
+	q+=sprintf(q,"\r\n%s",body);
+    }
+    else
+    {
+	*out=0;
+        for(i=0,q=out;i<ln;i++)
+        {
+    	    if(sess && !strncasecmp(line[i],"transport:",10))
+    	    {
+		q+=sprintf(q,"Transport: RTP/AVP;unicast;destination=%s;source=%s;"
+		    "client_port=%d-%d;server_port=%d-%d\r\n",
+		    inet_ntoa(sess->client_ip),lfd_m[li-1].srvip,sess->client_port,sess->client_port+1,
+		    sess->recv_port,sess->recv_port+1);
+	    }
+	    else q+=sprintf(q,"%s\r\n",translate_describe(line[i],li-1,buf,sizeof(buf)));
+	}
     }
     free(s);
     return out;
@@ -740,7 +796,7 @@ void poll_loop(int accsock)
 			    	if (req_complete(lfd_m[i].inbuf))
 			    	{
 			            if (debug>1) fprintf(stderr,"------------------- new req\n%s------------------\n",lfd_m[i].inbuf);
-				    translated=translate_request(lfd_m[i].inbuf,lfd_m[i].client_ip);
+				    translated=translate_request(lfd_m[i].inbuf,i);
 				    if (!translated) { dropconnection(i,5); continue; }
 			            if (debug>1) fprintf(stderr,"------------------- converted req\n%s------------\n",translated);
                             	    write(lfd[i+1].fd,translated,strlen(translated));
@@ -753,10 +809,16 @@ void poll_loop(int accsock)
 			    }
 			    else if (lfd_m[i].type==f_server)
 			    {
-				if (!strncmp(lfd_m[i].inbuf,"RTSP/1.0 200",12))
+				if (!rsp_complete(lfd_m[i].inbuf))
 				{
-				    lfd_m[i].inbuf[len]=0;
-				    translated=translate_response(lfd_m[i].inbuf);
+				    lfd_m[i].inbuf_offset+=len;
+				    if (lfd_m[i].inbuf_offset>=MAXREQUESTLEN-1) dropconnection(i,3);
+				}
+				else if (!strncmp(lfd_m[i].inbuf,"RTSP/1.0 200",12))
+				{
+				    lfd_m[i].inbuf[lfd_m[i].inbuf_offset+len]=0;
+				    lfd_m[i].inbuf_offset=0;
+				    translated=translate_response(lfd_m[i].inbuf,i);
 				    if (!translated) { dropconnection(i,5); continue; }
 				    if (debug>1) fprintf(stderr,"----------------------- translated res\n%s",translated);
 				    write(lfd[i-1].fd,translated,strlen(translated));
@@ -768,6 +830,7 @@ void poll_loop(int accsock)
 				        lfd_m[i].inbuf[len]=0;
 				        fprintf(stderr,"----------------------- res\n%s",lfd_m[i].inbuf);
 				    }
+				    lfd_m[i].inbuf_offset=0;
 				    write(lfd[i-1].fd,lfd_m[i].inbuf,len);
 				}
 			    } else fprintf(stderr,"unknown lfd type. ignored");
