@@ -838,15 +838,16 @@ void poll_loop(int accsock)
                     }
                 }
         }
-        if (lastcollect<now-10)
-        {
-	   dump_sessions();
-           if (debug>2) fprintf(stderr,"dropping sessions older than %d seconds\n",idletimeout);
-           for (i=1;i<nfd;i++) 
-                if (lfd_m[i].type==f_client && !lfd_m[i].deleted && lfd_m[i].lastact+idletimeout<now) 
-		   dropconnection(i,1);  // marks fds as removed, clean up is down later
-           lastcollect=now;
-        }
+	// TODO: we need a better idle timeout for tcp and udp connections based on the session
+        // if (lastcollect<now-10)
+        // {
+	   // dump_sessions();
+           // if (debug>2) fprintf(stderr,"dropping sessions older than %d seconds\n",idletimeout);
+           // for (i=1;i<nfd;i++) 
+                // if (lfd_m[i].type==f_client && !lfd_m[i].deleted && lfd_m[i].lastact+idletimeout<now) 
+		   // dropconnection(i,1);  // marks fds as removed, clean up is done later
+           // lastcollect=now;
+        // }
 	cleanup_lfd();
     }
 }
