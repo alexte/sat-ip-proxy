@@ -9,7 +9,14 @@ It has two parts:
 
 - rtsp-proxy written in C. This is an rtsp proxy specifically for the sat>ip service.
 
-It works for me, but I tested it with inverto.tv Sat>IP Multibox (1.17) server and Elgato Sat>IP client (Android) only until now.
+It works for me, but I only tested it with this server:
 
-Based on the protocol specification: http://www.satip.info/sites/satip/files/resource/satip_specification_version_1_2_2.pdf
+- inverto.tv Sat>IP Multibox (1.17)
+
+and these clients:
+
+- Elgato Sat>IP client (Android)
+- Kathrein Sat Receiver UFSConnect 906
+
+The software is based on the protocol specification: http://www.satip.info/sites/satip/files/resource/satip_specification_version_1_2_2.pdf
 
