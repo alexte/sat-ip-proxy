@@ -47,19 +47,24 @@ You need node.js and npm to run the ssdp server.
 Compile
 -------
 
+```
 npm install
 make
+```
 
 Sample startup
 --------------
 
 If 192.168.42.40 is your SAT>IP server:
 
-> node ssdp-server.js &
-> ./rtsp-proxy  192.168.42.40
+```
+node ssdp-server.js &
+./rtsp-proxy  192.168.42.40
+```
 
 Daemon mode is not implemented yet. You may start the server in background or use "screen"
 
-> screen -d -m sh -c "node ssdp-server.js & ./rtsp-proxy  192.168.42.40"
-
+```
+screen -d -m sh -c "node ssdp-server.js & ./rtsp-proxy  192.168.42.40"
+```
 
