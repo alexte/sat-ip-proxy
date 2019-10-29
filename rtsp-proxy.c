@@ -64,7 +64,7 @@ struct LFD_M {
     char inbuf[MAXREQUESTLEN+1];
     int inbuf_offset;
     time_t lastact;
-    enum { f_accept,f_client,f_server,f_udprcv} type;
+    enum { f_accept,f_client,f_server,f_udprcv,f_rtcp} type;
     struct SESSION *sessionpointer;
     struct in_addr client_ip;
     struct sockaddr_in saddr;
@@ -302,7 +302,7 @@ char *reasonstr[]={"OK","Timeout","Hangup","Request to long","Server not reachab
 
 void dropconnection(int n,int reason)
 {
-    if (lfd_m[n].type==f_udprcv) { fprintf(stderr,"dropconnection not allowed for udp session\n"); return; }
+    if (lfd_m[n].type==f_udprcv || lfd_m[n].type==f_rtcp) { fprintf(stderr,"dropconnection not allowed for udp session\n"); return; }
 
     if (lfd_m[n].type==f_server) n--;	// drop client and server connection, select client first
     if (debug)
@@ -420,7 +420,7 @@ int start_udp_proxy(struct SESSION *s,struct in_addr client_ip,int client_port)
     lfd[nfd].fd=fd;
     lfd[nfd].events=POLLIN|POLLPRI;
     lfd[nfd].revents=0;
-    lfd_m[nfd].type=f_udprcv;
+    lfd_m[nfd].type=f_rtcp;
     lfd_m[nfd].sessionpointer=s;
     lfd_m[nfd].saddr.sin_family=AF_INET;
     lfd_m[nfd].saddr.sin_addr=client_ip;
@@ -695,7 +695,7 @@ char *translate_response(char *s_in, int li)
 
 void poll_loop(int accsock)
 {
-    int i,nret,newfd,len;
+    int i,j,nret,newfd,len;
     time_t lastcollect;
     struct sockaddr_in sin;
     socklen_t sinlen;
@@ -721,13 +721,13 @@ void poll_loop(int accsock)
         switch(nret)
         {
             case 0:     // timeout
-                if (debug>2) fprintf(stderr,"poll returned from timeout (%d open sockets)\n",nfd);
+                if (debug>3) fprintf(stderr,"poll returned from timeout (%d open sockets)\n",nfd);
                 break;
             case -1:    // error
                 fprintf(stderr,"poll failed %s\n",strerror(errno));
                 return;
             default:    // real socket events
-                if (debug>2) fprintf(stderr,"nfd returned %d\n",nret);
+                if (debug>3) fprintf(stderr,"nfd returned %d\n",nret);
                 if (lfd[0].revents&(POLLERR|POLLHUP|POLLNVAL))          // an error occured ??
                 { fprintf(stderr,"poll accept-fd failed %s\n",strerror(errno)); return; }
                 if (lfd[0].revents&POLLIN && nfd>=MAXOPENFDS-1) 
@@ -780,9 +780,22 @@ void poll_loop(int accsock)
 			if (lfd_m[i].type==f_udprcv)
 			{
     			    len = recv(lfd[i].fd, lfd_m[i].inbuf, MAXREQUESTLEN, 0);
-                	    if (debug>2) fprintf(stderr,"----------------------- udp bytes:%d\n",len);
-			    sendto(lfd[i].fd,lfd_m[i].inbuf,len,0,&lfd_m[i].saddr,sizeof(lfd_m[i].saddr));
-			    continue;
+                            if (debug>3) fprintf(stderr,"<<<  UDP packet (bytes:%d) <<<\n",len);
+                            sendto(lfd[i].fd,lfd_m[i].inbuf,len,0,&lfd_m[i].saddr,sizeof(lfd_m[i].saddr));
+                            continue;
+                        }
+                        if (lfd_m[i].type==f_rtcp)
+                        {
+                            len = recv(lfd[i].fd, lfd_m[i].inbuf, MAXREQUESTLEN, 0);
+                            sendto(lfd[i].fd,lfd_m[i].inbuf,len,0,&lfd_m[i].saddr,sizeof(lfd_m[i].saddr));
+                            for(j=0;j<len;j++)
+                            {
+                                if(lfd_m[i].inbuf[j]<32 || lfd_m[i].inbuf[j]>126)
+                                    lfd_m[i].inbuf[j]='.';
+                            }
+                            lfd_m[i].inbuf[len]=0;
+                            if (debug>2) fprintf(stderr,"<<<<<<<<<<<<<<<<<<<<<<<<<<<<< RTCP packet <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<< \n%s\n------------------------------------------------------------------------------\n",lfd_m[i].inbuf);
+                            continue;
 			}
 
                         len=read(lfd[i].fd,lfd_m[i].inbuf+lfd_m[i].inbuf_offset,MAXREQUESTLEN-lfd_m[i].inbuf_offset);
@@ -795,10 +808,9 @@ void poll_loop(int accsock)
 				lfd_m[i].inbuf[lfd_m[i].inbuf_offset+len]=0;
 			    	if (req_complete(lfd_m[i].inbuf))
 			    	{
-			            if (debug>1) fprintf(stderr,"------------------- new req\n%s------------------\n",lfd_m[i].inbuf);
-				    translated=translate_request(lfd_m[i].inbuf,i);
+                                    if (debug>1) fprintf(stderr,">>>>>>>>>>>>>>>>>>>>> new req ------------------------------------------------ \n%s------------------------------------------------------------------------------\n",lfd_m[i].inbuf);				    translated=translate_request(lfd_m[i].inbuf,i);
 				    if (!translated) { dropconnection(i,5); continue; }
-			            if (debug>1) fprintf(stderr,"------------------- converted req\n%s------------\n",translated);
+                                    if (debug>1) fprintf(stderr,"------------------------------------ converted req >>>>>>>>>>>>>>>>>>>>>>>>>>> \n%s------------------------------------------------------------------------------\n",translated);
                             	    write(lfd[i+1].fd,translated,strlen(translated));
 				    lfd_m[i].inbuf_offset=0;
 			        } else
@@ -818,9 +830,9 @@ void poll_loop(int accsock)
 				{
 				    lfd_m[i].inbuf[lfd_m[i].inbuf_offset+len]=0;
 				    lfd_m[i].inbuf_offset=0;
-				    translated=translate_response(lfd_m[i].inbuf,i);
+                                    if (debug>1) fprintf(stderr,"---------------------------------------------- res <<<<<<<<<<<<<<<<<<<<<<<<<<< \n%s------------------------------------------------------------------------------\n",lfd_m[i].inbuf);				    translated=translate_response(lfd_m[i].inbuf,i);
 				    if (!translated) { dropconnection(i,5); continue; }
-				    if (debug>1) fprintf(stderr,"----------------------- translated res\n%s",translated);
+                                    if (debug>1) fprintf(stderr,"<<<<<<<<<<<<<< translated res ------------------------------------------------ \n%s------------------------------------------------------------------------------\n",translated);
 				    write(lfd[i-1].fd,translated,strlen(translated));
 				}
 				else
@@ -828,7 +840,7 @@ void poll_loop(int accsock)
 				    if (debug>1)
 				    {
 				        lfd_m[i].inbuf[len]=0;
-				        fprintf(stderr,"----------------------- res\n%s",lfd_m[i].inbuf);
+                                        fprintf(stderr,"<<<<<<<<<<<<<<<<<< direct res ------------------------------------------------ \n%s------------------------------------------------------------------------------\n",lfd_m[i].inbuf);
 				    }
 				    lfd_m[i].inbuf_offset=0;
 				    write(lfd[i-1].fd,lfd_m[i].inbuf,len);
@@ -842,7 +854,7 @@ void poll_loop(int accsock)
         // if (lastcollect<now-10)
         // {
 	   // dump_sessions();
-           // if (debug>2) fprintf(stderr,"dropping sessions older than %d seconds\n",idletimeout);
+           // if (debug>3) fprintf(stderr,"dropping sessions older than %d seconds\n",idletimeout);
            // for (i=1;i<nfd;i++) 
                 // if (lfd_m[i].type==f_client && !lfd_m[i].deleted && lfd_m[i].lastact+idletimeout<now) 
 		   // dropconnection(i,1);  // marks fds as removed, clean up is done later
