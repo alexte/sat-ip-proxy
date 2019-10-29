@@ -53,7 +53,7 @@ struct SESSION {
 
 void usage()
 {
-    fprintf(stderr,"usage: %s [-d] [-i <srvip>] [-p <port>] <target>\n"
+    fprintf(stderr,"usage: %s [-d] [-d] [-d] [-d] [-i <srvip>] [-p <port>] <target>\n"
 	           "    srvip: ip to listen to (default 0.0.0.0 = any)\n"
 		   "    port: tcp port to listen and connect to rtsp (default 554)\n",prg);
 }
@@ -808,7 +808,8 @@ void poll_loop(int accsock)
 				lfd_m[i].inbuf[lfd_m[i].inbuf_offset+len]=0;
 			    	if (req_complete(lfd_m[i].inbuf))
 			    	{
-                                    if (debug>1) fprintf(stderr,">>>>>>>>>>>>>>>>>>>>> new req ------------------------------------------------ \n%s------------------------------------------------------------------------------\n",lfd_m[i].inbuf);				    translated=translate_request(lfd_m[i].inbuf,i);
+                                    if (debug>1) fprintf(stderr,">>>>>>>>>>>>>>>>>>>>> new req ------------------------------------------------ \n%s------------------------------------------------------------------------------\n",lfd_m[i].inbuf);
+				    translated=translate_request(lfd_m[i].inbuf,i);
 				    if (!translated) { dropconnection(i,5); continue; }
                                     if (debug>1) fprintf(stderr,"------------------------------------ converted req >>>>>>>>>>>>>>>>>>>>>>>>>>> \n%s------------------------------------------------------------------------------\n",translated);
                             	    write(lfd[i+1].fd,translated,strlen(translated));
@@ -830,7 +831,8 @@ void poll_loop(int accsock)
 				{
 				    lfd_m[i].inbuf[lfd_m[i].inbuf_offset+len]=0;
 				    lfd_m[i].inbuf_offset=0;
-                                    if (debug>1) fprintf(stderr,"---------------------------------------------- res <<<<<<<<<<<<<<<<<<<<<<<<<<< \n%s------------------------------------------------------------------------------\n",lfd_m[i].inbuf);				    translated=translate_response(lfd_m[i].inbuf,i);
+                                    if (debug>1) fprintf(stderr,"---------------------------------------------- res <<<<<<<<<<<<<<<<<<<<<<<<<<< \n%s------------------------------------------------------------------------------\n",lfd_m[i].inbuf);
+				    translated=translate_response(lfd_m[i].inbuf,i);
 				    if (!translated) { dropconnection(i,5); continue; }
                                     if (debug>1) fprintf(stderr,"<<<<<<<<<<<<<< translated res ------------------------------------------------ \n%s------------------------------------------------------------------------------\n",translated);
 				    write(lfd[i-1].fd,translated,strlen(translated));
