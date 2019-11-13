@@ -31,9 +31,10 @@
 
 char *prg;
 int debug=0;
-char *port="554";
+char *lport="554";
 char *srvip="0.0.0.0";
-char *target;
+char target[256];
+char port[6];
 int idletimeout=120;
 int nr_sessions=0;
 time_t now;
@@ -868,8 +869,9 @@ void poll_loop(int accsock)
 
 int main(int argc,char **argv)
 {
-    int ch,accsock; 
-
+    int ch,accsock;
+    char *p;
+	
     prg=argv[0];
     while ((ch=getopt(argc,argv,"di:p:"))!= EOF)
     {
@@ -877,7 +879,7 @@ int main(int argc,char **argv)
         {
             case 'd':   debug++; break;
             case 'i':   srvip=optarg; break;
-            case 'p':   port=optarg; break;
+            case 'p':   lport=optarg; break;
             default:    usage(); exit(1); 
         }
     }
@@ -886,9 +888,22 @@ int main(int argc,char **argv)
 
     if (argc!=1) { usage(); exit(1);  }
     
-    target=argv[0];
+    p = argv[0];
+    while (*p != '\0')
+    {
+        if (*p == ':')
+            *p  = ' ';
+        p++;
+    }
+    sscanf(argv[0],"%s %s",target,port);
+    if (port[0]=='\0')
+        sprintf(port,"%s","554");
+    if (debug)
+    {
+        fprintf(stderr,"Using target SAT>IP server %s with port %s\n",target,port);
+    }
 
-    accsock=prepare_socket(srvip,port);
+    accsock=prepare_socket(srvip,lport);
     if (accsock==-1) exit(3);
 
     poll_loop(accsock);
