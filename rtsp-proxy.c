@@ -35,6 +35,7 @@ char *lport="554";
 char *srvip="0.0.0.0";
 char target[256];
 char port[6];
+int udp_recv_port=15000;
 int idletimeout=120;
 int nr_sessions=0;
 time_t now;
@@ -54,9 +55,10 @@ struct SESSION {
 
 void usage()
 {
-    fprintf(stderr,"usage: %s [-d] [-d] [-d] [-d] [-i <srvip>] [-p <port>] <target>\n"
+    fprintf(stderr,"usage: %s [-d] [-d] [-d] [-d] [-i <srvip>] [-p <port>] [-r <rport>] <target>\n"
 	           "    srvip: ip to listen to (default 0.0.0.0 = any)\n"
-		   "    port: tcp port to listen and connect to rtsp (default 554)\n",prg);
+		   "    port: tcp port to listen and connect to rtsp (default 554)\n"
+		   "    rport: base udp port to receive RTP packets (default 15000)\n",prg);
 }
 
 struct pollfd lfd[MAXOPENFDS];
@@ -387,8 +389,6 @@ char *get_sessionid(char *line[])
  
     return sessionid;
 }
-
-int udp_recv_port=15000;
 
 int start_udp_proxy(struct SESSION *s,struct in_addr client_ip,int client_port)
 {
@@ -873,13 +873,14 @@ int main(int argc,char **argv)
     char *p;
 	
     prg=argv[0];
-    while ((ch=getopt(argc,argv,"di:p:"))!= EOF)
+    while ((ch=getopt(argc,argv,"di:p:r:"))!= EOF)
     {
         switch(ch)
         {
             case 'd':   debug++; break;
             case 'i':   srvip=optarg; break;
             case 'p':   lport=optarg; break;
+            case 'r':   udp_recv_port=atoi(optarg); break;
             default:    usage(); exit(1); 
         }
     }
@@ -901,6 +902,8 @@ int main(int argc,char **argv)
     if (debug)
     {
         fprintf(stderr,"Using target SAT>IP server %s with port %s\n",target,port);
+        fprintf(stderr,"Listening in address %s at port %s\n",srvip,lport);
+        fprintf(stderr,"Configured RTP receive ports %d-%d\n",udp_recv_port,udp_recv_port+1);
     }
 
     accsock=prepare_socket(srvip,lport);
