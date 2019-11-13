@@ -36,7 +36,9 @@ If you have more then one network. E.g. you have a router that seperates your WL
 you can put this proxy on any computer in your WLAN network or the router. This enables SAT>IP for your WLAN 
 clients (e.g. Elgato SAT>IP Client).
 
-You may also use a remote SAT>IP server, if the SAT>IP server is reachable by IP. 
+You may also use a remote SAT>IP server, if the SAT>IP server is reachable by IP.
+
+Futhermore you can use it as a SAT>IP RTSP protocol debugger interpossing it the middle.
 
 Dependencies
 ------------
