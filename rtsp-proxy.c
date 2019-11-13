@@ -33,8 +33,8 @@ char *prg;
 int debug=0;
 char *lport="554";
 char *srvip="0.0.0.0";
-char target[256];
-char port[6];
+char *target;
+char *port;
 int udp_recv_port=15000;
 int idletimeout=120;
 int nr_sessions=0;
@@ -669,7 +669,7 @@ char *translate_response(char *s_in, int li)
         for(*out=0,i=0,q=out;i<ln&&*line[i];i++)
         {
     	    if(!strncasecmp(line[i],"content-length:",15))
-		q+=sprintf(q,"Content-Length: %d\r\n", strlen(body));
+		q+=sprintf(q,"Content-Length: %ld\r\n", strlen(body));
 	    else 
 		q+=sprintf(q,"%s\r\n",translate_describe(line[i],li-1,buf,sizeof(buf)));
 	}
@@ -697,7 +697,7 @@ char *translate_response(char *s_in, int li)
 void poll_loop(int accsock)
 {
     int i,j,nret,newfd,len;
-    time_t lastcollect;
+    // time_t lastcollect;
     struct sockaddr_in sin;
     socklen_t sinlen;
     long long nc=0; // number of connections
@@ -712,7 +712,7 @@ void poll_loop(int accsock)
     lfd_m[0].deleted=FALSE;
     nfd=1;
 
-    lastcollect=now;
+    // lastcollect=now;
 
     while (1)
     {
@@ -889,21 +889,15 @@ int main(int argc,char **argv)
 
     if (argc!=1) { usage(); exit(1);  }
     
-    p = argv[0];
-    while (*p != '\0')
-    {
-        if (*p == ':')
-            *p  = ' ';
-        p++;
-    }
-    sscanf(argv[0],"%s %s",target,port);
-    if (port[0]=='\0')
-        sprintf(port,"%s","554");
+    target = argv[0];
+    p=strchr(target,':');
+    if (p) { *p=0; port=p+1; } else { port="554"; }
+
     if (debug)
     {
         fprintf(stderr,"Using target SAT>IP server %s with port %s\n",target,port);
         fprintf(stderr,"Listening in address %s at port %s\n",srvip,lport);
-        fprintf(stderr,"Configured RTP receive ports %d-%d\n",udp_recv_port,udp_recv_port+1);
+        fprintf(stderr,"Configured RTP receive ports %d-%d,..\n",udp_recv_port,udp_recv_port+1);
     }
 
     accsock=prepare_socket(srvip,lport);
