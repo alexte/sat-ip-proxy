@@ -29,9 +29,13 @@
 #define TRUE 1
 #define FALSE 0
 
+#define DEFAULT_RTSP_PORT "554"
+
+#define MIN(x, y) (((x) < (y)) ? (x) : (y))
+
 char *prg;
 int debug=0;
-char *lport="554";
+char *lport=DEFAULT_RTSP_PORT;
 char *srvip="0.0.0.0";
 char *target;
 char *port;
@@ -72,7 +76,7 @@ struct LFD_M {
     struct in_addr client_ip;
     struct sockaddr_in saddr;
     int deleted;
-    char srvip[16];
+    char srvip[64];
 } lfd_m[MAXOPENFDS];
 
 int nfd;
@@ -585,11 +589,12 @@ char *translate_request(char *s,int li)
 	p++;
 	if (*p=='\r' || *p=='\n') p++;
     }
-    if (ln>99) { fprintf(stderr,"Too many header header lines in request\n"); return NULL; }
+    if (ln>99) { fprintf(stderr,"Too many header header lines in request\n"); return NULL; }  // TODO possible memory leak (strdup), possible DOS attack
 
-			// compile all regex rules
-    ret=regcomp(&top_regex,"^.* rtsp://([0-9.]+)[:/].*",REG_EXTENDED);	// change target IP in rtsp url
-    if (ret) { fprintf(stderr,"compiling regex failed\n"); return NULL; }
+			// compile regex rule
+							// TDODO does not work for IPv6
+    ret=regcomp(&top_regex,"^.* rtsp://([0-9.:]+)/.*",REG_EXTENDED);	// change target IP in rtsp url
+    if (ret) { fprintf(stderr,"compiling regex failed\n"); exit(42); }
 
     ret=regexec(&top_regex,line[0],5,match,0);
     if (!ret) // match
@@ -599,9 +604,14 @@ char *translate_request(char *s,int li)
 	    strncpy(out,line[0],match[1].rm_so);
 	    out[match[1].rm_so]=0;
 	    strcat(out,target);
+	    strcat(out,":");
+	    strcat(out,port);
 	    strcat(out,line[0]+match[1].rm_eo);
     	    strcat(out,"\r\n");
-	    strncpy(lfd_m[li].srvip,line[0]+match[1].rm_so,match[1].rm_eo-match[1].rm_so);
+
+	    strncpy(lfd_m[li].srvip,line[0]+match[1].rm_so,MIN(match[1].rm_eo-match[1].rm_so,60));
+	    lfd_m[li].srvip[60]=0;
+	    if (strchr(lfd_m[li].srvip,':')) *strchr(lfd_m[li].srvip,':')=0;	 // remeber only the IP part
 	}
     }
     else { strcpy(out,line[0]); }
@@ -891,7 +901,7 @@ int main(int argc,char **argv)
     
     target = argv[0];
     p=strchr(target,':');
-    if (p) { *p=0; port=p+1; } else { port="554"; }
+    if (p) { *p=0; port=p+1; } else { port=DEFAULT_RTSP_PORT; }
 
     if (debug)
     {
