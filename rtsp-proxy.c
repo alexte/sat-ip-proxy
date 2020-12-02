@@ -67,8 +67,8 @@ void usage()
 	           "    srvip: ip to listen to (default 0.0.0.0 = any)\n"
 		   "    port: tcp port to listen and connect to rtsp (default 554)\n"
 		   "    rport: base udp port to receive RTP packets (default 15000)\n"
-		   "    targetip: ip to send RTP/RTCP packets instead of the client address (optional)\n"
-		   "    targetport: port to send RTP/RTCP packets (default 16000)\n"
+		   "    targetip: alternative address to send RTP/RTCP packets (optional)\n"
+		   "    targetport: alternative port to send RTP/RTCP packets (default 16000)\n"
 		   "    -t|-T: with the lower all packets are redirected, with upper are duplicated\n",prg);
 }
 
@@ -824,7 +824,7 @@ void poll_loop(int accsock)
                             sendto(lfd[i].fd,lfd_m[i].inbuf,len,0,&lfd_m[i].saddr,sizeof(lfd_m[i].saddr));
                             if (redir_dup)
                                 sendto(lfd[i].fd,lfd_m[i].inbuf,len,0,&lfd_m[i].saddr_cpy,sizeof(lfd_m[i].saddr_cpy));
-                             continue;
+                            continue;
                         }
                         if (lfd_m[i].type==f_rtcp)
                         {
@@ -946,7 +946,7 @@ int main(int argc,char **argv)
         fprintf(stderr,"Listening in address %s at port %s\n",srvip,lport);
         fprintf(stderr,"Configured RTP receive ports %d-%d\n",udp_recv_port,udp_recv_port+1);
         if (redir_rtp[0] != 0)
-            fprintf(stderr,"Target RTP/RTCP: %s\n",redir_rtp);
+            fprintf(stderr,"Alternative RTP/RTCP target: %s\n",redir_rtp);
     }
 
     accsock=prepare_socket(srvip,lport);
@@ -961,7 +961,7 @@ int main(int argc,char **argv)
         if (phent==NULL) { fprintf(stderr,"gethostbyname(%s) failed\n",redir_rtp); exit(3); }
         memmove(&redir_ip,phent->h_addr,sizeof(redir_ip));
         if (debug>1)
-            fprintf(stderr,"Resolved address for target RTP/RTCP: %s:%d\n", inet_ntoa(redir_ip), redir_port);
+            fprintf(stderr,"Resolved address for alternative RTP/RTCP target: %s:%d\n", inet_ntoa(redir_ip), redir_port);
     }
 
     poll_loop(accsock);
