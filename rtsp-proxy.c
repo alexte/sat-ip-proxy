@@ -9,7 +9,7 @@
 #include<unistd.h>
 #include<time.h>
 #include<sys/poll.h>
-#include<syslog.h> 
+#include<syslog.h>
 #include<stdlib.h>
 #include<unistd.h>
 #include<sys/socket.h>
@@ -33,19 +33,19 @@
 
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 
-char *prg;
-int debug=0;
-char *lport=DEFAULT_RTSP_PORT;
-char *srvip="0.0.0.0";
-char *redir_rtp="";
-int redir_dup=0;
+char  *prg;
+int    debug=0;
+char  *lport=DEFAULT_RTSP_PORT;
+char  *srvip="0.0.0.0";
+char  *redir_rtp="";
+int    redir_dup=0;
 struct in_addr redir_ip;
-int redir_port;
-char *target;
-char *port;
-int udp_recv_port=15000;
-int idletimeout=120;
-int nr_sessions=0;
+int    redir_port;
+char  *target;
+char  *port;
+int    udp_recv_port=15000;
+int    idletimeout=120;
+int    nr_sessions=0;
 time_t now;
 
 struct SESSION {
@@ -89,7 +89,7 @@ struct LFD_M {
 
 int nfd;
 
-void remove_lfd(int n)  	// mark as deleted first, cleanup later, to keep fd array 
+void remove_lfd(int n)  	// mark as deleted first, cleanup later, to keep fd array
 {
     if (debug>1) fprintf(stderr,"remove_lfd(%d)\n",n);
     lfd_m[n].deleted=TRUE;
@@ -100,10 +100,10 @@ void dump_sessions();
 void cleanup_lfd()
 {
     int i,move=0;
-    
+
     for (i=0;i<nfd;)
     {
-	if (move>0) 
+	if (move>0)
 	{
 	    lfd[i]=lfd[i+move];
 	    lfd_m[i]=lfd_m[i+move];
@@ -206,7 +206,7 @@ void add_pids(struct SESSION *s,char *pidstr)
 {
     char *p,*ep;
     int pid;
-    
+
     for(p=pidstr;*p;)
     {
 	if (s->npids>=MAXPIDS) { fprintf(stderr,"MAXPIDS erreicht\n"); return; }
@@ -254,7 +254,7 @@ int prepare_socket(char *srvip,char *port)
     if (portnr==0)
     {
         pservent=getservbyname(port,"tcp");
-        if (pservent==NULL) 
+        if (pservent==NULL)
         { fprintf(stderr,"get tcp port failed\n"); return -1;  }
         portnr=ntohs(pservent->s_port);
     }
@@ -269,10 +269,10 @@ int prepare_socket(char *srvip,char *port)
     x=1;
     setsockopt(accept_s, SOL_SOCKET, SO_REUSEADDR, &x, sizeof(x));
 
-    if (bind(accept_s, (struct sockaddr *)&sin, sizeof sin) < 0) 
+    if (bind(accept_s, (struct sockaddr *)&sin, sizeof sin) < 0)
     { fprintf(stderr,"bind() failed\n"); return -1;  }
 
-    if (listen(accept_s, 500) < 0) 
+    if (listen(accept_s, 500) < 0)
     { fprintf(stderr,"listen() failed\n"); return -1;  }
 
     return accept_s;
@@ -305,7 +305,7 @@ int connect_server()
 
     s=socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);
     if (s<0) { fprintf(stderr,"socket() failed\n"); return -1;  }
-    if (connect(s,(struct sockaddr *)&sa,sizeof(sa))<0) 
+    if (connect(s,(struct sockaddr *)&sa,sizeof(sa))<0)
     {
         fprintf(stderr,"connect failed (%s)\n",strerror(errno));
         return -1;
@@ -434,7 +434,7 @@ int start_udp_proxy(struct SESSION *s,struct in_addr client_ip,int client_port)
             lfd_m[nfd].saddr.sin_port=lfd_m[nfd].saddr_cpy.sin_port;
         }
     }
-    nfd++; 
+    nfd++;
 
     fd=open_udp(srvip,udp_recv_port+1);
     if (fd<0) return -1;
@@ -460,7 +460,7 @@ int start_udp_proxy(struct SESSION *s,struct in_addr client_ip,int client_port)
             lfd_m[nfd].saddr.sin_port=lfd_m[nfd].saddr_cpy.sin_port;
         }
     }
-    nfd++; 
+    nfd++;
 
     udp_recv_port+=2;
     return 1;
@@ -480,7 +480,7 @@ int handle_setup(char *line[],struct in_addr client_ip)
 	// ---------------------------------------- lookup session
     sessionid=get_sessionid(line);
     s=get_session(sessionid);
-    if (!s) 
+    if (!s)
     {
         cseq=get_header(line,"cseq");
     	if (cseq==NULL) return -1;
@@ -493,27 +493,27 @@ int handle_setup(char *line[],struct in_addr client_ip)
     for(i=1;;) // search transport headers
     {
 	i=search_header(line,"transport",i);
-        if (i<0) break; 
+        if (i<0) break;
 
 	if (strcasestr(line[i],"multicast")) remove_header(line,i);
-	else 
+	else
 	{
     	    *newtransport=0;
 	    strcpy(newtransport,"Transport:");
 	    part=strtok(line[i]+10,";");
 	    while(part)
 	    {
-		if (!strncasecmp(part,"client_port=",12)) 
+		if (!strncasecmp(part,"client_port=",12))
 		{
 		    if (debug>1) fprintf(stderr,"Found client_port: %s\n",part);
-		    client_port=atol(part+12); // takes first port number from range 
+		    client_port=atol(part+12); // takes first port number from range
 					       // sat>ip uses two ports: ts and tuner_info
 
 		    if (s->client_port<0) { s->client_port=client_port; }
 		    if (s->recv_port<0) start_udp_proxy(s,s->client_ip,client_port);
 		    sprintf(parameter,"client_port=%d-%d",s->recv_port,s->recv_port+1);
 
-		    strcat(newtransport,parameter); strcat(newtransport,";"); 
+		    strcat(newtransport,parameter); strcat(newtransport,";");
 		}
 		else { strcat(newtransport,part); strcat(newtransport,";"); }
 		part=strtok(NULL,";");
@@ -540,13 +540,13 @@ void handle_play(char *line[])
     if (s && s->cseq)  // remove old cseq when session is allready set
     { free(s->cseq); s->cseq=NULL; }
 
-    // Sample Play Requests:  
+    // Sample Play Requests:
     //	PLAY rtsp://192.168.0.1:554/stream=12?pids=0,18,20 RTSP/1.0
     //	PLAY rtsp://192.168.0.1:554/stream=12?addpids=1028 RTSP/1.0
 
 
     for(p=line[0];*p && *p!='?';p++);
-    
+
     if (!*p) return;  // PLAY request without QS ?
 
     qs=strdup(p+1);
@@ -574,7 +574,7 @@ char *replace_str(char *s,char *srch, char *repl, char *out, int cbout)
 {
     char *p, *q=out;
     int iLen1=strlen(srch),iLen2=strlen(repl);
-    
+
     if (!(p=strstr(s,srch))) strncpy(out,s,cbout);
     else {
     	while (p) {
@@ -618,10 +618,9 @@ char *translate_request(char *s,int li)
 	if (*p=='\r' || *p=='\n') p++;
     }
     if (ln>99) { fprintf(stderr,"Too many header header lines in request\n"); return NULL; }  // TODO possible memory leak (strdup), possible DOS attack
-
-			// compile regex rule
-							// TDODO does not work for IPv6
-    ret=regcomp(&top_regex,"^.* rtsp://([0-9.:]+)/.*",REG_EXTENDED);	// change target IP in rtsp url
+                                                                        // compile regex rule
+                                                                        // TDODO does not work for IPv6
+    ret=regcomp(&top_regex,"^.* rtsp://([0-9.:]+)/.*",REG_EXTENDED);    // change target IP in rtsp url
     if (ret) { fprintf(stderr,"compiling regex failed\n"); exit(42); }
 
     ret=regexec(&top_regex,line[0],5,match,0);
@@ -644,8 +643,8 @@ char *translate_request(char *s,int li)
     }
     else { strcpy(out,line[0]); }
 
-    if (!strncmp(line[0],"SETUP ",6)) 
-	if (handle_setup(line,lfd_m[li].client_ip)<0) return NULL; 
+    if (!strncmp(line[0],"SETUP ",6))
+	if (handle_setup(line,lfd_m[li].client_ip)<0) return NULL;
 
     if (!strncmp(line[0],"PLAY ",5)) handle_play(line);
     if (!strncmp(line[0],"TEARDOWN ",9)) handle_teardown(line);
@@ -676,7 +675,7 @@ char *translate_response(char *s_in, int li)
     s=strdup(s_in);
     if(!s) { perror("out of memory"); exit(1); }
 
-    for (ln=0,p=s;*p && ln<=99;ln++)		// split request up into lines
+    for (ln=0,p=s;*p && ln<=99;ln++)   // split request up into lines
     {
         line[ln]=p;
 	for (;*p && *p!='\r' && *p!='\n';p++);
@@ -692,10 +691,10 @@ char *translate_response(char *s_in, int li)
 
     if (cseq && sessionid)
     {
-	if (!(sess=get_session(sessionid)))  			// new session
+	if (!(sess=get_session(sessionid)))   // new session
 	{
-	    sess=get_session_by_cseq(cseq);   		// search corresponding SETUP request
-	    if (sess) sess->id=strdup(sessionid); 	// set sessionid
+	    sess=get_session_by_cseq(cseq);         // search corresponding SETUP request
+	    if (sess) sess->id=strdup(sessionid);   // set sessionid
 	}
     }
 
@@ -708,7 +707,7 @@ char *translate_response(char *s_in, int li)
         {
     	    if(!strncasecmp(line[i],"content-length:",15))
 		q+=sprintf(q,"Content-Length: %ld\r\n", strlen(body));
-	    else 
+	    else
 		q+=sprintf(q,"%s\r\n",translate_describe(line[i],li-1,buf,sizeof(buf)));
 	}
 	q+=sprintf(q,"\r\n%s",body);
@@ -769,9 +768,9 @@ void poll_loop(int accsock)
                 if (debug>3) fprintf(stderr,"nfd returned %d\n",nret);
                 if (lfd[0].revents&(POLLERR|POLLHUP|POLLNVAL))          // an error occured ??
                 { fprintf(stderr,"poll accept-fd failed %s\n",strerror(errno)); return; }
-                if (lfd[0].revents&POLLIN && nfd>=MAXOPENFDS-1) 
+                if (lfd[0].revents&POLLIN && nfd>=MAXOPENFDS-1)
                 { nret--; fprintf(stderr,"maximum session number reached (%d)\n",MAXOPENFDS); }
-                if (lfd[0].revents&POLLIN && nfd<MAXOPENFDS-1)            // new connection coming in
+                if (lfd[0].revents&POLLIN && nfd<MAXOPENFDS-1)          // new connection coming in
                 {
                     nret--;
 		    sinlen=sizeof(struct sockaddr_in);
@@ -789,7 +788,7 @@ void poll_loop(int accsock)
                         lfd_m[nfd].deleted=FALSE;
                         nfd++; nc++;
 
-			newfd=connect_server();	 	// connect to server immediately
+			newfd=connect_server();    // connect to server immediately
                         if (newfd<0)
 			{
 			    fprintf(stderr,"connect to server failed %s\n",strerror(errno));
@@ -798,22 +797,22 @@ void poll_loop(int accsock)
 			}
 			else
 			{
-			    lfd[nfd].fd=newfd;		 // connect to server immediately
+			    lfd[nfd].fd=newfd;    // connect to server immediately
 			    lfd[nfd].events=POLLIN|POLLPRI;
 			    lfd[nfd].revents=0;
                             lfd_m[nfd].lastact=now;
 			    lfd_m[nfd].type=f_server;
 			    lfd_m[nfd].inbuf_offset=0;
                             lfd_m[nfd].deleted=FALSE;
-			    nfd++; 
+			    nfd++;
 			}
                     }
                 }
-                for(i=1;i<nfd && nret>0;i++)                     // data coming in ?
+                for(i=1;i<nfd && nret>0;i++)    // data coming in ?
                 {
                     if (lfd[i].revents) nret--;
                     if (lfd[i].revents&(POLLHUP|POLLERR|POLLNVAL)) { fprintf(stderr,"HUP/ERR/NVAL %d\n",lfd[i].fd); dropconnection(i,2); }
-                    else if (lfd[i].revents&POLLIN) 
+                    else if (lfd[i].revents&POLLIN)
                     {
 			lfd[i].revents=0;
 			if (lfd_m[i].type==f_udprcv)
@@ -902,8 +901,8 @@ void poll_loop(int accsock)
         // {
 	   // dump_sessions();
            // if (debug>3) fprintf(stderr,"dropping sessions older than %d seconds\n",idletimeout);
-           // for (i=1;i<nfd;i++) 
-                // if (lfd_m[i].type==f_client && !lfd_m[i].deleted && lfd_m[i].lastact+idletimeout<now) 
+           // for (i=1;i<nfd;i++)
+                // if (lfd_m[i].type==f_client && !lfd_m[i].deleted && lfd_m[i].lastact+idletimeout<now)
 		   // dropconnection(i,1);  // marks fds as removed, clean up is done later
            // lastcollect=now;
         // }
@@ -915,7 +914,7 @@ int main(int argc,char **argv)
 {
     int ch,accsock;
     char *p;
-	
+
     prg=argv[0];
     while ((ch=getopt(argc,argv,"di:p:r:t:T:"))!= EOF)
     {
@@ -928,14 +927,14 @@ int main(int argc,char **argv)
             case 'T':   redir_dup=1;
             case 't':   if (redir_rtp[0] == 0) { redir_rtp=optarg; break; }
                             else { fprintf(stderr,"-t and -T options are incompatible\n"); exit(1); }
-            default:    usage(); exit(1); 
+            default:    usage(); exit(1);
         }
     }
     argc-=optind;
     argv+=optind;
 
     if (argc!=1) { usage(); exit(1);  }
-    
+
     target = argv[0];
     p=strchr(target,':');
     if (p) { *p=0; port=p+1; } else { port=DEFAULT_RTSP_PORT; }
