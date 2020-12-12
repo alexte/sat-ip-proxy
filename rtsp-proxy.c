@@ -48,6 +48,7 @@ char  *port;
 int    udp_recv_start=15000;
 int    udp_recv_port;
 int    idletimeout=120;
+int    nr_reconnects=-1;
 int    nr_sessions=0;
 int    unique_recv=0;
 time_t now;
@@ -67,8 +68,9 @@ struct SESSION {
 
 void usage()
 {
-    fprintf(stderr,"usage: %s [-d] [-d] [-d] [-d] [-i <srvip>] [-p <port>] [-r|-R <rport>] [-t|-T <targetip:targetport>] <target>\n"
-	           "    srvip: ip to listen to (default 0.0.0.0 = any)\n"
+    fprintf(stderr,"usage: %s [-d] [-d] [-d] [-d] [-f <retries>] [-i <srvip>] [-p <port>] [-r|-R <rport>] [-t|-T <targetip:targetport>] <target>\n"
+		   "    retries: max retries when fixing RTSP sessions reconnecting automatically (default -1: disabled)\n"
+		   "    srvip: ip to listen to (default 0.0.0.0 = any)\n"
 		   "    port: tcp port to listen and connect to rtsp (default 554)\n"
 		   "    rport: base udp port to receive RTP packets (default 15000)\n"
 		   "    -r|-R: with the upper the port remains equal for all connections\n"
@@ -88,6 +90,7 @@ struct LFD_M {
     struct in_addr client_ip;
     struct sockaddr_in saddr;
     struct sockaddr_in saddr_cpy;
+    int count_reconnect;
     int deleted;
     char srvip[64];
 } lfd_m[MAXOPENFDS];
@@ -335,6 +338,24 @@ void dropconnection(int n,int reason)
     remove_lfd(n+1);
 }
 
+int reconnect(int n, int* rev_count)
+{
+    if (debug)
+    {
+        fprintf(stderr,"%ld reconnecting (counter=%d) to %s: (%d/%d)\n",now,(rev_count)? *rev_count : -1,inet_ntoa(lfd_m[n].client_ip),n,nfd);
+    }
+    close(lfd[n].fd);
+    int newfd;
+    newfd=connect_server();
+    if (newfd >= 0)
+    {
+        lfd[n].fd=newfd;
+        if (rev_count) (*rev_count)--;
+        return newfd;
+    }
+    return -1;
+}
+
 int req_complete(char *s)
 {
     if(strstr(s,"\r\n\r\n")) return TRUE;
@@ -428,6 +449,7 @@ int start_udp_proxy(struct SESSION *s,struct in_addr client_ip,int client_port)
     lfd_m[nfd].saddr.sin_addr=client_ip;
     lfd_m[nfd].saddr.sin_port=ntohs(client_port);
     lfd_m[nfd].lastact=now;
+    lfd_m[nfd].count_reconnect=nr_reconnects;
     lfd_m[nfd].deleted=FALSE;
     if (redir_rtp[0] != 0)
     {
@@ -454,6 +476,7 @@ int start_udp_proxy(struct SESSION *s,struct in_addr client_ip,int client_port)
     lfd_m[nfd].saddr.sin_addr=client_ip;
     lfd_m[nfd].saddr.sin_port=ntohs(client_port+1);
     lfd_m[nfd].lastact=now;
+    lfd_m[nfd].count_reconnect=nr_reconnects;
     lfd_m[nfd].deleted=FALSE;
     if (redir_rtp[0] != 0)
     {
@@ -760,6 +783,7 @@ void poll_loop(int accsock)
     lfd[0].revents=0;
     lfd_m[0].lastact=now;
     lfd_m[0].type=f_accept;
+    lfd_m[0].count_reconnect=nr_reconnects;
     lfd_m[0].deleted=FALSE;
     nfd=1;
 
@@ -787,7 +811,7 @@ void poll_loop(int accsock)
                 if (lfd[0].revents&POLLIN && nfd<MAXOPENFDS-1)          // new connection coming in
                 {
                     nret--;
-		    sinlen=sizeof(struct sockaddr_in);
+                    sinlen=sizeof(struct sockaddr_in);
                     newfd=accept(accsock,(struct sockaddr *)&sin, &sinlen);
                     if (newfd<0) fprintf(stderr,"accept socket failed %s\n",strerror(errno));
                     else
@@ -795,10 +819,11 @@ void poll_loop(int accsock)
                         lfd[nfd].fd=newfd;
                         lfd[nfd].events=POLLIN|POLLPRI;
                         lfd[nfd].revents=0;
-			lfd_m[nfd].type=f_client;
-			lfd_m[nfd].inbuf_offset=0;
+                        lfd_m[nfd].type=f_client;
+                        lfd_m[nfd].inbuf_offset=0;
                         lfd_m[nfd].lastact=now;
                         lfd_m[nfd].client_ip=sin.sin_addr;
+                        lfd_m[nfd].count_reconnect=nr_reconnects;
                         lfd_m[nfd].deleted=FALSE;
                         nfd++; nc++;
 
@@ -857,7 +882,16 @@ void poll_loop(int accsock)
 			}
 
                         len=read(lfd[i].fd,lfd_m[i].inbuf+lfd_m[i].inbuf_offset,MAXREQUESTLEN-lfd_m[i].inbuf_offset);
-                        if (len<=0) dropconnection(i,2);
+                        if (len<=0)
+                        {
+                            int* rc = &(lfd_m[i].count_reconnect);
+                            if (lfd_m[i].type == f_server && *rc > 0 && reconnect(i,rc))
+                            {
+                                continue;
+                            }
+                            else
+                                dropconnection(i,2);
+                        }
                         else
                         {
                             lfd_m[i].lastact=now;
@@ -887,6 +921,7 @@ void poll_loop(int accsock)
 				}
 				else if (!strncmp(lfd_m[i].inbuf,"RTSP/1.0 200",12))
 				{
+				    lfd_m[i].count_reconnect=nr_reconnects;
 				    lfd_m[i].inbuf[lfd_m[i].inbuf_offset+len]=0;
 				    lfd_m[i].inbuf_offset=0;
                                     if (debug>1) fprintf(stderr,"---------------------------------------------- res <<<<<<<<<<<<<<<<<<<<<<<<<<< \n%s------------------------------------------------------------------------------\n",lfd_m[i].inbuf);
@@ -930,11 +965,12 @@ int main(int argc,char **argv)
     char *p;
 
     prg=argv[0];
-    while ((ch=getopt(argc,argv,"di:p:r:R:t:T:"))!= EOF)
+    while ((ch=getopt(argc,argv,"df:i:p:r:R:t:T:"))!= EOF)
     {
         switch(ch)
         {
             case 'd':   debug++; break;
+            case 'f':   nr_reconnects=atoi(optarg); break;
             case 'i':   srvip=optarg; break;
             case 'p':   lport=optarg; break;
             case 'R':   unique_recv=1;
@@ -961,6 +997,7 @@ int main(int argc,char **argv)
     {
         fprintf(stderr,"Using target SAT>IP server %s with port %s\n",target,port);
         fprintf(stderr,"Listening in address %s at port %s\n",srvip,lport);
+        fprintf(stderr,"Reconnecting to server enabled (max %d times between commands)\n",nr_reconnects);
         fprintf(stderr,"Configured RTP receive ports %d-%d\n",udp_recv_port,udp_recv_port+1);
         if (redir_rtp[0] != 0)
             fprintf(stderr,"Alternative RTP/RTCP target: %s\n",redir_rtp);
