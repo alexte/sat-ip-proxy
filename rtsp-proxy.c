@@ -20,6 +20,7 @@
 #include<errno.h>
 #include<regex.h>
 #include<arpa/inet.h>
+#include <stdarg.h>
 
 #define MAXOPENFDS 2000
 #define MAXREQUESTLEN 2000
@@ -35,6 +36,7 @@
 
 char  *prg;
 int    debug=0;
+int    dump=0;
 char  *lport=DEFAULT_RTSP_PORT;
 char  *srvip="0.0.0.0";
 char  *redir_rtp="";
@@ -64,7 +66,8 @@ struct SESSION {
 
 void usage()
 {
-    fprintf(stderr,"usage: %s [-d] [-d] [-d] [-d] [-f <retries>] [-i <srvip>] [-p <port>] [-r <rport>] [-t|-T <targetip:targetport>] <target>\n"
+    fprintf(stderr,"usage: %s [-d] [-d] [-d] [-d] [-e] [-e] [-f <retries>] [-i <srvip>] [-p <port>] [-r <rport>] [-t|-T <targetip:targetport>] <target>\n"
+               "    -e: extendend dump commands over stdout (repeat for increased verbosity)\n"
                "    retries: max retries when fixing RTSP sessions reconnecting automatically (default -1: disabled)\n"
                "    srvip: ip to listen to (default 0.0.0.0 = any)\n"
                "    port: tcp port to listen and connect to rtsp (default 554)\n"
@@ -203,6 +206,25 @@ void dump_sessions()
             fprintf(stderr,"%d ",s->pid[j]);
         puts("\n");
     }
+}
+
+void remote_dump_send(const char* format, ...)
+{
+    if (!dump) return;
+    va_list arglist;
+
+    // Note: You can extract dumps with the "awk" tool like :
+    //         <RTSP-COMMAND>    : awk -F"|" '{ print $2 }' log.file
+    //         <RTSP-RECEIVED>   : awk -F"|" '{ print $3 }' log.file
+    //         <RTSP-TRANSLATED> : awk -F"|" '{ print $4 }' log.file
+    //       Execute with "rtsp-proxy ... > log.file"
+
+    fprintf(stdout,"$$ PROTO $$ | ");
+    va_start(arglist, format);
+    vfprintf(stdout, format, arglist);
+    va_end(arglist);
+    fprintf(stdout,"\n");
+    fflush(stdout);
 }
 
 void add_pids(struct SESSION *s,char *pidstr)
@@ -666,6 +688,20 @@ char *translate_request(char *s,int li)
     }
     else { strcpy(out,line[0]); }
 
+    if (dump)
+    {
+        int i0=strcspn(line[0], " ");
+        if (dump>1)
+        {
+            int i1=strcspn(line[0]+i0+1, " ");
+            int o0=strcspn(out, " ");
+            int o1=strcspn(out+o0+1, " ");
+            remote_dump_send("%.*s | %.*s | %.*s", i0, line[0], i1, line[0]+i0+1, o1, out+o0+1);
+        }
+        else
+            remote_dump_send("%.*s", i0, line[0]);
+    }
+
     if (!strncmp(line[0],"SETUP ",6))
         if (handle_setup(line,lfd_m[li].client_ip)<0) return NULL;
 
@@ -951,11 +987,12 @@ int main(int argc,char **argv)
     char *p;
 
     prg=argv[0];
-    while ((ch=getopt(argc,argv,"df:i:p:r:t:T:"))!= EOF)
+    while ((ch=getopt(argc,argv,"def:i:p:r:t:T:"))!= EOF)
     {
         switch(ch)
         {
             case 'd':   debug++; break;
+            case 'e':   dump++; break;
             case 'f':   nr_reconnects=atoi(optarg); break;
             case 'i':   srvip=optarg; break;
             case 'p':   lport=optarg; break;
