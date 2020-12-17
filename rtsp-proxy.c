@@ -1036,6 +1036,8 @@ int main(int argc,char **argv)
     DEBUG_TIME();
     fprintf(stderr,"* starting proxy at... %s \n",now_log);
     poll_loop(accsock);
+    DEBUG_TIME();
+    fprintf(stderr,"* closing proxy at... %s \n",now_log);
 
     exit(0);
 
