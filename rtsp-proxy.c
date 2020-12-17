@@ -68,12 +68,12 @@ struct SESSION {
 
 void usage()
 {
-    fprintf(stderr,"usage: %s [-d] [-d] [-d] [-d] [-f <retries>] [-i <srvip>] [-p <port>] [-r|-R <rport>] [-t|-T <targetip:targetport>] <target>\n"
+    fprintf(stderr,"usage: %s [-1] [-d] [-d] [-d] [-d] [-f <retries>] [-i <srvip>] [-p <port>] [-r <rport>] [-t|-T <targetip:targetport>] <target>\n"
+               "    -1: single client mode (with fixed udp port)\n"
                "    retries: max retries when fixing RTSP sessions reconnecting automatically (default -1: disabled)\n"
                "    srvip: ip to listen to (default 0.0.0.0 = any)\n"
                "    port: tcp port to listen and connect to rtsp (default 554)\n"
                "    rport: base udp port to receive RTP packets (default 15000)\n"
-               "    -r|-R: with the upper the port remains equal for all connections\n"
                "    targetip: alternative address to send RTP/RTCP packets (optional)\n"
                "    targetport: alternative port to send RTP/RTCP packets (default 16000)\n"
                "    -t|-T: with the lower all packets are redirected, with upper are duplicated\n",prg);
@@ -965,15 +965,15 @@ int main(int argc,char **argv)
     char *p;
 
     prg=argv[0];
-    while ((ch=getopt(argc,argv,"df:i:p:r:R:t:T:"))!= EOF)
+    while ((ch=getopt(argc,argv,"1:df:i:p:r:t:T:"))!= EOF)
     {
         switch(ch)
         {
+            case '1':   unique_recv=1;
             case 'd':   debug++; break;
             case 'f':   nr_reconnects=atoi(optarg); break;
             case 'i':   srvip=optarg; break;
             case 'p':   lport=optarg; break;
-            case 'R':   unique_recv=1;
             case 'r':   udp_recv_start=atoi(optarg); break;
             case 'T':   redir_dup=1;
             case 't':   if (redir_rtp[0] == 0) { redir_rtp=optarg; break; }
