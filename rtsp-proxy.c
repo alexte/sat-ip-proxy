@@ -26,6 +26,8 @@
 #define MAXREQUESTLEN 2000
 #define MAXSESSIONS 300
 #define MAXPIDS 100
+#define MAXLISTPORT 100
+#define MAXUPPERPORT 65535
 
 #define TRUE 1
 #define FALSE 0
@@ -45,10 +47,12 @@ struct in_addr redir_ip;
 int    redir_port;
 char  *target;
 char  *port;
-int    udp_recv_port=15000;
+int    udp_recv_start=15000;
+int    udp_recv_port;
 int    idletimeout=120;
 int    nr_reconnects=-1;
 int    nr_sessions=0;
+int    unique_recv=0;
 time_t now;
 
 struct SESSION {
@@ -66,8 +70,9 @@ struct SESSION {
 
 void usage()
 {
-    fprintf(stderr,"usage: %s [-d] [-d] [-d] [-d] [-e] [-e] [-f <retries>] [-i <srvip>] [-p <port>] [-r <rport>] [-t|-T <targetip:targetport>] <target>\n"
+    fprintf(stderr,"usage: %s [-1] [-d] [-d] [-d] [-d] [-e] [-e] [-f <retries>] [-i <srvip>] [-p <port>] [-r <rport>] [-t|-T <targetip:targetport>] <target>\n"
                "    -e: extendend dump commands over stdout (repeat for increased verbosity)\n"
+               "    -1: single client mode (with fixed udp port)\n"
                "    retries: max retries when fixing RTSP sessions reconnecting automatically (default -1: disabled)\n"
                "    srvip: ip to listen to (default 0.0.0.0 = any)\n"
                "    port: tcp port to listen and connect to rtsp (default 554)\n"
@@ -507,7 +512,16 @@ int start_udp_proxy(struct SESSION *s,struct in_addr client_ip,int client_port)
     }
     nfd++;
 
-    udp_recv_port+=2;
+    if (!unique_recv)
+    {
+        udp_recv_port+=2;
+
+        if (udp_recv_port+1 > udp_recv_start+MAXLISTPORT || udp_recv_port+1 > MAXUPPERPORT)
+            udp_recv_port = udp_recv_start;
+
+        if (debug>1) fprintf(stderr,"Next listening base UDP port changed to: %d (for the next session)\n", udp_recv_port);
+    }
+
     return 1;
 }
 
@@ -987,16 +1001,18 @@ int main(int argc,char **argv)
     char *p;
 
     prg=argv[0];
-    while ((ch=getopt(argc,argv,"def:i:p:r:t:T:"))!= EOF)
+    while ((ch=getopt(argc,argv,"1:def:i:p:r:t:T:"))!= EOF)
+    while ((ch=getopt(argc,argv,"1:df:i:p:r:t:T:"))!= EOF)
     {
         switch(ch)
         {
+            case '1':   unique_recv=1;
             case 'd':   debug++; break;
             case 'e':   dump++; break;
             case 'f':   nr_reconnects=atoi(optarg); break;
             case 'i':   srvip=optarg; break;
             case 'p':   lport=optarg; break;
-            case 'r':   udp_recv_port=atoi(optarg); break;
+            case 'r':   udp_recv_start=atoi(optarg); break;
             case 'T':   redir_dup=1;
             case 't':   if (redir_rtp[0] == 0) { redir_rtp=optarg; break; }
                             else { fprintf(stderr,"-t and -T options are incompatible\n"); exit(1); }
@@ -1011,6 +1027,9 @@ int main(int argc,char **argv)
     target = argv[0];
     p=strchr(target,':');
     if (p) { *p=0; port=p+1; } else { port=DEFAULT_RTSP_PORT; }
+
+    udp_recv_port = udp_recv_start;
+    if (udp_recv_port+1 > MAXUPPERPORT) exit(1);
 
     if (debug)
     {
