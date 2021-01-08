@@ -213,25 +213,6 @@ void dump_sessions()
     }
 }
 
-void remote_dump_send(const char* format, ...)
-{
-    if (!dump) return;
-    va_list arglist;
-
-    // Note: You can extract dumps with the "awk" tool like :
-    //         <RTSP-COMMAND>    : awk -F"|" '{ print $2 }' log.file
-    //         <RTSP-RECEIVED>   : awk -F"|" '{ print $3 }' log.file
-    //         <RTSP-TRANSLATED> : awk -F"|" '{ print $4 }' log.file
-    //       Execute with "rtsp-proxy ... > log.file"
-
-    fprintf(stdout,"$$ PROTO $$ | ");
-    va_start(arglist, format);
-    vfprintf(stdout, format, arglist);
-    va_end(arglist);
-    fprintf(stdout,"\n");
-    fflush(stdout);
-}
-
 void add_pids(struct SESSION *s,char *pidstr)
 {
     char *p,*ep;
@@ -710,10 +691,10 @@ char *translate_request(char *s,int li)
             int i1=strcspn(line[0]+i0+1, " ");
             int o0=strcspn(out, " ");
             int o1=strcspn(out+o0+1, " ");
-            remote_dump_send("%.*s | %.*s | %.*s", i0, line[0], i1, line[0]+i0+1, o1, out+o0+1);
+            printf("DUMP: %.*s | %.*s | %.*s\n", i0, line[0], i1, line[0]+i0+1, o1, out+o0+1);
         }
         else
-            remote_dump_send("%.*s", i0, line[0]);
+            printf("DUMP: %.*s\n", i0, line[0]);
     }
 
     if (!strncmp(line[0],"SETUP ",6))
@@ -1002,7 +983,6 @@ int main(int argc,char **argv)
 
     prg=argv[0];
     while ((ch=getopt(argc,argv,"1:def:i:p:r:t:T:"))!= EOF)
-    while ((ch=getopt(argc,argv,"1:df:i:p:r:t:T:"))!= EOF)
     {
         switch(ch)
         {
