@@ -70,3 +70,8 @@ Daemon mode is not implemented yet. You may start the server in background or us
 screen -d -m sh -c "node ssdp-server.js & ./rtsp-proxy  192.168.42.40"
 ```
 
+Security
+--------
+
+This software is not developed with security in mind. It will probably break a client or server 
+misbehaves. So please use this only in safe environments.
