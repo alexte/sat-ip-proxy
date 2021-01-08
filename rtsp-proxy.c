@@ -61,22 +61,21 @@ int    idletimeout=120;
 int    nr_reconnects=-1;
 int    nr_sessions=0;
 int    unique_recv=0;
-time_t now;
-struct tm  ts;
-char   now_log[80];
 
-#define DEBUG_TIME(...)              \
- {                                   \
-    time(&now);                      \
-    if(debug>0)                      \
-    {                                \
-        ts = *localtime(&now);       \
-        strftime(now_log,            \
-                 sizeof(now_log),    \
-          "%a %Y-%m-%d %H:%M:%S %Z", \
-                 &ts);               \
-    }                                \
- }
+time_t now;
+char   now_log[80]="";
+
+char *update_now()
+{                                   
+    struct tm *ts;
+    time(&now);
+    if(debug>0)
+    {
+        ts = localtime(&now);
+        strftime(now_log,sizeof(now_log),"%a %Y-%m-%d %H:%M:%S %Z",ts);
+    }
+    return now_log;
+}
 
 struct SESSION {
     char *id;
@@ -125,7 +124,7 @@ int nfd;
 
 void remove_lfd(int n)  	// mark as deleted first, cleanup later, to keep fd array
 {
-    if (debug>1) { DEBUG_TIME(); fprintf(stderr,"%s: remove_lfd(%d)\n",now_log,n); }
+    if (debug>1) { fprintf(stderr,"%s: remove_lfd(%d)\n",now_log,n); }
     lfd_m[n].deleted=TRUE;
 }
 
@@ -229,7 +228,6 @@ void dump_sessions()
     for (i=0;i<nr_sessions;i++)
     {
         s=&session[i];
-        DEBUG_TIME();
         fprintf(stderr,"%s: %d  id:%s ip:%s cseq:%s pids:",now_log,i, session[i].id, inet_ntoa(session[i].client_ip), session[i].cseq);
         for (j=0;j<s->npids;j++)
             fprintf(stderr,"%s: %d ",now_log,s->pid[j]);
@@ -244,7 +242,7 @@ void add_pids(struct SESSION *s,char *pidstr)
 
     for(p=pidstr;*p;)
     {
-        if (s->npids>=MAXPIDS) { DEBUG_TIME(); fprintf(stderr,"%s: MAXPIDS reached!\n",now_log); return; }
+        if (s->npids>=MAXPIDS) { fprintf(stderr,"%s: MAXPIDS reached!\n",now_log); return; }
         pid=strtol(p,&ep,10);
         if (ep==p) break;
         s->pid[s->npids]=pid; s->npids++;
@@ -266,7 +264,7 @@ int open_udp(char *srvip,int port)
     int s;
 
     phent=gethostbyname(srvip);
-    if (phent==NULL) { DEBUG_TIME(); fprintf(stderr,"%s: gethostbyname(%s) failed!\n",now_log,srvip); return -1; }
+    if (phent==NULL) { fprintf(stderr,"%s: gethostbyname(%s) failed!\n",update_now(),srvip); return -1; }
     memmove(&sin.sin_addr,phent->h_addr,sizeof(sin.sin_addr));
     sin.sin_port=htons(port);
 
@@ -285,7 +283,6 @@ int prepare_socket(char *srvip,char *port)
     int portnr,x;
     int accept_s;
 
-    DEBUG_TIME();
     portnr=atoi(port);
     if (portnr==0)
     {
@@ -322,11 +319,10 @@ int connect_server()
     static int firstrun=1;
     int s,portn;
 
-    DEBUG_TIME();
     if (firstrun)
     {
         phent=gethostbyname(target);
-        if (phent==NULL) { fprintf(stderr,"%s: gethostbyname failed!\n",now_log); return -1; }
+        if (phent==NULL) { fprintf(stderr,"%s: gethostbyname failed!\n",update_now()); return -1; }
         portn=atoi(port);
         if (port==0)
         {
@@ -341,10 +337,10 @@ int connect_server()
     }
 
     s=socket(AF_INET,SOCK_STREAM,IPPROTO_TCP);
-    if (s<0) { fprintf(stderr,"%s: socket() failed!\n",now_log); return -1; }
+    if (s<0) { fprintf(stderr,"%s: socket() failed!\n",update_now()); return -1; }
     if (connect(s,(struct sockaddr *)&sa,sizeof(sa))<0)
     {
-        fprintf(stderr,"%s: connect failed (%s)!\n",now_log,strerror(errno));
+        fprintf(stderr,"%s: connect failed (%s)!\n",update_now(),strerror(errno));
         return -1;
     }
     return s;
@@ -354,7 +350,6 @@ char *reasonstr[]={"OK","Timeout","Hangup","Request to long","Server not reachab
 
 void dropconnection(int n,int reason)
 {
-    DEBUG_TIME();
     if (lfd_m[n].type==f_udprcv || lfd_m[n].type==f_rtcp) { fprintf(stderr,"%s: dropconnection not allowed for udp session\n",now_log); return; }
 
     if (lfd_m[n].type==f_server) n--;	// drop client and server connection, select client first
@@ -372,8 +367,7 @@ int reconnect(int n, int* rev_count)
 {
     if (debug)
     {
-        DEBUG_TIME();
-        fprintf(stderr,"%s: reconnecting (counter=%d) to %s: (%d/%d)\n",now_log,(rev_count)? *rev_count : -1,inet_ntoa(lfd_m[n].client_ip),n,nfd);
+        fprintf(stderr,"%s: reconnecting (counter=%d) to %s: (%d/%d)\n",update_now(),(rev_count)? *rev_count : -1,inet_ntoa(lfd_m[n].client_ip),n,nfd);
     }
     close(lfd[n].fd);
     int newfd;
@@ -463,7 +457,7 @@ int start_udp_proxy(struct SESSION *s,struct in_addr client_ip,int client_port)
 {
     int fd;
 
-    if (nfd>=MAXOPENFDS-2) { DEBUG_TIME(); fprintf(stderr,"%s: Maximum FDS reached",now_log); return -1; }
+    if (nfd>=MAXOPENFDS-2) { fprintf(stderr,"%s: Maximum FDS reached",now_log); return -1; }
 
     s->recv_port=udp_recv_port;
 
@@ -573,7 +567,7 @@ int handle_setup(char *line[],struct in_addr client_ip)
             {
                 if (!strncasecmp(part,"client_port=",12))
                 {
-                    if (debug>1) { DEBUG_TIME(); fprintf(stderr,"%s: Found client_port: %s\n",now_log,part); }
+                    if (debug>1) { fprintf(stderr,"%s: Found client_port: %s\n",now_log,part); }
                     client_port=atol(part+12); // takes first port number from range
                                                // sat>ip uses two ports: ts and tuner_info
                 
@@ -674,7 +668,6 @@ char *translate_request(char *s,int li)
     char *p;
 
     *out=0;
-    DEBUG_TIME();
 
     for (ln=0,p=s;ln<=99;ln++)		// split request up into lines
     {
@@ -757,7 +750,6 @@ char *translate_response(char *s_in, int li)
 
     s=strdup(s_in);
     if(!s) { perror("out of memory"); exit(1); }
-    DEBUG_TIME();
 
     for (ln=0,p=s;*p && ln<=99;ln++)   // split request up into lines
     {
@@ -824,7 +816,7 @@ void poll_loop(int accsock)
     long long nc=0; // number of connections
     char *translated;
 
-    time(&now);
+    update_now();
     lfd[0].fd=accsock;
     lfd[0].events=POLLIN|POLLPRI;
     lfd[0].revents=0;
@@ -839,7 +831,7 @@ void poll_loop(int accsock)
     while (1)
     {
         nret=poll(lfd,nfd,2000);
-        DEBUG_TIME();
+        update_now();
         // if (debug>1) dump_sessions();
         switch(nret)
         {
@@ -1012,8 +1004,6 @@ int main(int argc,char **argv)
     int ch,accsock;
     char *p;
 
-    now_log[0] = 0x0;
-
     prg=argv[0];
     while ((ch=getopt(argc,argv,"1:def:i:p:r:t:T:"))!= EOF)
     {
@@ -1036,6 +1026,8 @@ int main(int argc,char **argv)
     argv+=optind;
 
     if (argc!=1) { usage(); exit(1);  }
+
+    update_now();
 
     target = argv[0];
     p=strchr(target,':');
@@ -1069,11 +1061,9 @@ int main(int argc,char **argv)
             fprintf(stderr,"* Resolved address for alternative RTP/RTCP target: %s:%d\n", inet_ntoa(redir_ip), redir_port);
     }
 
-    DEBUG_TIME();
-    fprintf(stderr,"* starting proxy at... %s \n",now_log);
+    fprintf(stderr,"* starting proxy at... %s \n",update_now());
     poll_loop(accsock);
-    DEBUG_TIME();
-    fprintf(stderr,"* closing proxy at... %s \n",now_log);
+    fprintf(stderr,"* closing proxy at... %s \n",update_now());
 
     exit(0);
 
